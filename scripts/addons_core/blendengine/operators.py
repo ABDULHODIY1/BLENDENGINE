@@ -2,6 +2,8 @@
 #
 # BlendEngine operators.
 
+import os
+
 import bpy
 from bpy.props import BoolProperty, EnumProperty
 from bpy.types import Operator
@@ -11,6 +13,7 @@ from . import (
     animation_system,
     components,
     export_system,
+    game_package,
     input_system,
     optimization,
     performance,
@@ -976,7 +979,15 @@ class BE_OT_prepare_build(Operator):
         except Exception as ex:
             self.report({"ERROR"}, "Build package failed: %s" % ex)
             return {"CANCELLED"}
-        self.report({"INFO"}, "Build package written to %s" % package["package_dir"])
+        game_file = package.get("game_file")
+        if game_file:
+            print("[BlendEngine] Game ready: %s" % game_file)
+            if context.scene.blendengine_export.open_after_build and not bpy.app.background:
+                opened_with = game_package.run_program(package["package_dir"], os.path.splitext(os.path.basename(game_file))[0], game_file)
+                print("[BlendEngine] Launched game with %s" % opened_with)
+            self.report({"INFO"}, "Game ready: %s" % game_file)
+        else:
+            self.report({"INFO"}, "Build package written to %s" % package["package_dir"])
         return {"FINISHED"}
 
 

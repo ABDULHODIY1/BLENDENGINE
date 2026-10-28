@@ -18,6 +18,7 @@
 # Android/iOS WebView, where fetch() of local files is blocked.
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -708,7 +709,19 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
                 material = slots[slot_index] if 0 <= slot_index < len(slots) else None
                 return material_index(material)
 
+            # Identical geometry (copies, array/duplicate objects) is stored once, so the
+            # runtime can draw all users with one instanced draw call.
+            digest = hashlib.sha1()
+            for array in (positions, normals, uvs, indices):
+                if array is not None:
+                    digest.update(np.ascontiguousarray(array).tobytes())
+            digest.update(repr([(slot, first, count, lookup(slot)) for slot, first, count in groups]).encode())
+            content_key = ("content", digest.hexdigest())
+            if content_key in mesh_cache:
+                mesh_cache[key] = mesh_cache[content_key]
+                return mesh_cache[key]
             meshes.append(pack_mesh(writer, key[1], positions, normals, uvs, indices, groups, lookup))
+            mesh_cache[content_key] = len(meshes) - 1
         finally:
             evaluated.to_mesh_clear()
         mesh_cache[key] = len(meshes) - 1

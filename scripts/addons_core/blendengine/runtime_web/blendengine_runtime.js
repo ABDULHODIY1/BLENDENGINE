@@ -199,25 +199,48 @@ vec3 toneMap(vec3 x) {
 vec3 toSRGB(vec3 c) { return pow(c, vec3(1.0 / 2.2)); }
 `;
 
+  // Value noise / fbm used for procedural detail, water, clouds and grass.
+  const NOISE_GLSL = `
+float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float vnoise(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  return s / 0.9375;
+}
+`;
+
   const PBR_VS = `#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
+layout(location = 3) in mat4 aInstance;
 uniform mat4 uModel;
 uniform mat4 uViewProj;
-uniform mat4 uShadowMat;
+uniform mat4 uShadowMat0;
+uniform mat4 uShadowMat1;
 uniform mat3 uNormalMat;
-uniform float uNormalBias;
+uniform vec2 uNormalBias;
+uniform float uInstanced;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec2 vUV;
-out vec4 vShadow;
+out vec4 vShadow0;
+out vec4 vShadow1;
 void main() {
-  vec4 w = uModel * vec4(aPos, 1.0);
+  mat4 model = uInstanced > 0.5 ? aInstance : uModel;
+  mat3 nmat = uInstanced > 0.5 ? transpose(inverse(mat3(model))) : uNormalMat;
+  vec4 w = model * vec4(aPos, 1.0);
   vWorld = w.xyz;
-  vNormal = normalize(uNormalMat * aNormal);
+  vNormal = normalize(nmat * aNormal);
   vUV = vec2(aUV.x, 1.0 - aUV.y);
-  vShadow = uShadowMat * vec4(w.xyz + vNormal * uNormalBias, 1.0);
+  vShadow0 = uShadowMat0 * vec4(w.xyz + vNormal * uNormalBias.x, 1.0);
+  vShadow1 = uShadowMat1 * vec4(w.xyz + vNormal * uNormalBias.y, 1.0);
   gl_Position = uViewProj * w;
 }`;
 
@@ -229,7 +252,8 @@ const float PI = 3.14159265;
 in vec3 vWorld;
 in vec3 vNormal;
 in vec2 vUV;
-in vec4 vShadow;
+in vec4 vShadow0;
+in vec4 vShadow1;
 uniform vec4 uBaseColor;
 uniform float uMetallic;
 uniform float uRoughness;
@@ -243,9 +267,13 @@ uniform ivec4 uTexFlags;
 uniform vec3 uCamPos;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
-uniform sampler2DShadow uShadowMap;
+uniform sampler2DShadow uShadowMap0;
+uniform sampler2DShadow uShadowMap1;
 uniform float uShadowOn;
-uniform float uShadowTexel;
+uniform vec2 uShadowTexel;
+uniform float uDetail;
+uniform float uWater;
+uniform float uTime;
 uniform int uLightCount;
 uniform vec4 uLightPos[MAX_LIGHTS];
 uniform vec4 uLightColor[MAX_LIGHTS];
@@ -259,7 +287,18 @@ uniform float uDirect;
 uniform float uExposure;
 uniform float uBlend;
 ${SKY_GLSL}
+${NOISE_GLSL}
 out vec4 outColor;
+
+// Bump mapping from a scalar height using screen-space derivatives (no tangents needed).
+vec3 perturbNormal(vec3 p, vec3 n, float h, float strength) {
+  vec3 dpdx = dFdx(p), dpdy = dFdy(p);
+  float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
+  float det = dot(dpdx, r1);
+  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+  return normalize(abs(det) * n - strength * grad);
+}
 
 mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
   vec3 dp1 = dFdx(p), dp2 = dFdy(p);
@@ -295,16 +334,32 @@ vec2 envBRDF(float NoV, float r) {
   return vec2(-1.04, 1.04) * a004 + r4.zw;
 }
 
+const vec2 POISSON[12] = vec2[](
+  vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
+  vec2(0.962, -0.195), vec2(0.473, -0.480), vec2(0.519, 0.767), vec2(0.185, -0.893),
+  vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
+
+float sampleCascade(sampler2DShadow map, vec3 s, float radius, float rot) {
+  float c = cos(rot), sn = sin(rot);
+  mat2 R = mat2(c, sn, -sn, c);
+  float sum = 0.0;
+  for (int i = 0; i < 12; i++) sum += texture(map, vec3(s.xy + R * POISSON[i] * radius, s.z));
+  return sum / 12.0;
+}
+
+// Two cascades: a sharp near map and a wide far map, softly blended.
 float shadowFactor() {
   if (uShadowOn < 0.5) return 1.0;
-  vec3 s = vShadow.xyz / vShadow.w * 0.5 + 0.5;
-  if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0 || s.z >= 1.0) return 1.0;
-  float sum = 0.0;
-  for (int y = -1; y <= 1; y++)
-    for (int x = -1; x <= 1; x++)
-      sum += texture(uShadowMap, vec3(s.xy + vec2(x, y) * uShadowTexel * 1.25, s.z));
-  float edge = smoothstep(0.0, 0.08, min(min(s.x, 1.0 - s.x), min(s.y, 1.0 - s.y)));
-  return mix(1.0, sum / 9.0, edge);
+  float rot = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  vec3 s0 = vShadow0.xyz / vShadow0.w * 0.5 + 0.5;
+  vec3 s1 = vShadow1.xyz / vShadow1.w * 0.5 + 0.5;
+  float e0 = min(min(s0.x, 1.0 - s0.x), min(s0.y, 1.0 - s0.y));
+  float e1 = min(min(s1.x, 1.0 - s1.x), min(s1.y, 1.0 - s1.y));
+  float far = 1.0;
+  if (e1 > 0.0 && s1.z < 1.0) far = mix(1.0, sampleCascade(uShadowMap1, s1, uShadowTexel.y * 1.6, rot), smoothstep(0.0, 0.06, e1));
+  if (e0 <= 0.0 || s0.z >= 1.0) return far;
+  float near = sampleCascade(uShadowMap0, s0, uShadowTexel.x * 2.2, rot);
+  return mix(far, near, smoothstep(0.0, 0.12, e0));
 }
 
 void main() {
@@ -319,6 +374,24 @@ void main() {
 
   vec3 N = normalize(vNormal);
   if (!gl_FrontFacing) N = -N;
+  float camDist = length(uCamPos - vWorld);
+  if (uDetail > 0.0) {
+    // Procedural surface detail for untextured materials: large-scale tone
+    // variation, fine grain, roughness breakup and bump, fading with distance.
+    float macro = fbm(vWorld * 0.17);
+    float micro = fbm(vWorld * 2.9);
+    albedo *= mix(1.0, (0.74 + 0.52 * macro) * (0.86 + 0.28 * micro), uDetail);
+    rough = clamp(rough + (micro - 0.5) * 0.32 * uDetail, 0.04, 1.0);
+    float fade = 1.0 - smoothstep(12.0, 34.0, camDist);
+    if (fade > 0.0) N = perturbNormal(vWorld, N, fbm(vWorld * 7.0), 0.32 * uDetail * fade);
+  }
+  if (uWater > 0.5) {
+    vec3 q = vec3(vWorld.xy * 0.9, uTime * 0.35);
+    float h = fbm(q) + 0.5 * fbm(q * 2.3 + vec3(uTime * 0.2, 0.0, 0.0));
+    N = perturbNormal(vWorld, N, h, 0.35);
+    rough = 0.03;
+    metal = 0.0;
+  }
   if (uTexFlags.y == 1) {
     vec3 t = texture(uNormalTex, vUV).xyz * 2.0 - 1.0;
     t.y = -t.y;
@@ -330,7 +403,8 @@ void main() {
   vec3 V = toCam / max(dist, 1e-4);
   vec3 F0 = mix(vec3(0.04), albedo, metal);
 
-  vec3 color = brdf(N, V, uSunDir, albedo, metal, rough, F0) * uSunColor * shadowFactor();
+  float sunShadow = shadowFactor();
+  vec3 color = brdf(N, V, uSunDir, albedo, metal, rough, F0) * uSunColor * sunShadow;
 
   for (int i = 0; i < MAX_LIGHTS; i++) {
     if (i >= uLightCount) break;
@@ -369,15 +443,22 @@ void main() {
   }
 
   float alpha = uBlend > 0.5 ? base.a : 1.0;
+  if (uWater > 0.5) {
+    // Water: transparency drops at grazing angles where the sky reflection dominates.
+    float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
+    alpha = clamp(mix(alpha, 1.0, fres), 0.0, 1.0);
+  }
   if (uDirect > 0.5) color = toSRGB(toneMap(color * uExposure));
   outColor = vec4(color, alpha);
 }`;
 
   const DEPTH_VS = `#version 300 es
 layout(location = 0) in vec3 aPos;
+layout(location = 3) in mat4 aInstance;
 uniform mat4 uModel;
 uniform mat4 uViewProj;
-void main() { gl_Position = uViewProj * uModel * vec4(aPos, 1.0); }`;
+uniform float uInstanced;
+void main() { gl_Position = uViewProj * (uInstanced > 0.5 ? aInstance : uModel) * vec4(aPos, 1.0); }`;
 
   const DEPTH_FS = `#version 300 es
 precision mediump float;
@@ -405,7 +486,10 @@ uniform float uSkyIntensity;
 uniform float uDirect;
 uniform float uExposure;
 uniform float uOrtho;
+uniform float uTime;
+uniform float uClouds;
 ${SKY_GLSL}
+${NOISE_GLSL}
 out vec4 outColor;
 void main() {
   vec4 w = uInvViewProj * vec4(vUV * 2.0 - 1.0, 1.0, 1.0);
@@ -417,6 +501,17 @@ void main() {
     float mu = max(dot(d, uSunDir), 0.0);
     col += uSunColor * (0.015 * pow(mu, 6.0) + 0.12 * pow(mu, 120.0));
     col += uSunColor * 12.0 * smoothstep(0.99990, 0.99996, mu) * step(-0.02, d.z);
+    if (uClouds > 0.0 && d.z > 0.0) {
+      // Procedural cloud layer projected on a plane, lit by the sun with silver lining.
+      vec2 uv = d.xy / (d.z + 0.15) * 1.3 + uTime * vec2(0.012, 0.005);
+      float c = fbm(vec3(uv * 1.1, uTime * 0.01));
+      float detail = fbm(vec3(uv * 4.3, 3.7));
+      float cover = smoothstep(0.48, 0.78, c * 0.85 + detail * 0.25) * uClouds;
+      float thick = smoothstep(0.5, 0.95, c);
+      vec3 lit = mix(uSkyHorizon * 0.9 + vec3(0.25), vec3(1.05), 0.55) * (0.45 + 0.7 * clamp(uSunDir.z + 0.2, 0.0, 1.0));
+      vec3 cloud = mix(lit, lit * 0.62, thick) + uSunColor * 0.08 * pow(mu, 6.0);
+      col = mix(col, cloud * uSkyIntensity, cover * smoothstep(0.0, 0.2, d.z));
+    }
   }
   if (uDirect > 0.5) col = toSRGB(toneMap(col * uExposure));
   outColor = vec4(col, 1.0);
@@ -556,6 +651,10 @@ uniform float uSaturation;
 uniform float uTemperature;
 uniform float uLetterbox;
 uniform float uAspect;
+uniform sampler2D uRays;
+uniform vec3 uRaysColor;
+uniform sampler2D uLum;
+uniform float uAutoExposure;
 ${SKY_GLSL}
 out vec4 o;
 float linearDepth(float d) {
@@ -590,7 +689,13 @@ void main() {
   float ao = texture(uAO, vUV).r;
   c *= mix(1.0, ao, uAOStrength);
   c += texture(uBloom, vUV).rgb * uBloomStrength;
-  c *= uExposure * uTint;
+  c += texture(uRays, vUV).r * uRaysColor;
+  float auto = 1.0;
+  if (uAutoExposure > 0.0) {
+    float avg = exp(texture(uLum, vec2(0.5)).r);
+    auto = mix(1.0, clamp(pow(0.22 / max(avg, 1e-3), 0.55), 0.6, 1.9), uAutoExposure);
+  }
+  c *= uExposure * uTint * auto;
   c *= vec3(1.0 + uTemperature * 0.12, 1.0, 1.0 - uTemperature * 0.12);
   c = toneMap(c);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -656,11 +761,145 @@ void main() {
   o = vec4(c, 1.0);
 }`;
 
+
+  // Light shafts: radial blur of bright sky pixels toward the sun (half resolution).
+  const GODRAYS_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform vec2 uSunUV;
+uniform float uDensity;
+out vec4 o;
+void main() {
+  vec2 delta = (vUV - uSunUV) * (uDensity / 40.0);
+  vec2 uv = vUV;
+  float decay = 1.0, sum = 0.0;
+  for (int i = 0; i < 40; i++) {
+    uv -= delta;
+    if (texture(uDepth, uv).r >= 0.9999) {
+      vec3 c = texture(uScene, uv).rgb;
+      sum += min(dot(c, vec3(0.2126, 0.7152, 0.0722)), 8.0) * decay;
+    }
+    decay *= 0.955;
+  }
+  o = vec4(vec3(sum / 40.0), 1.0);
+}`;
+
+  // Eye adaptation: average log luminance, smoothed over time in a 1x1 target.
+  const LUM_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uScene;
+uniform sampler2D uPrev;
+uniform float uBlend;
+out vec4 o;
+void main() {
+  float s = 0.0;
+  for (int y = 0; y < 8; y++)
+    for (int x = 0; x < 8; x++) {
+      vec3 c = texture(uScene, (vec2(x, y) + 0.5) / 8.0).rgb;
+      s += log(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-4));
+    }
+  float cur = s / 64.0;
+  float prev = texture(uPrev, vec2(0.5)).r;
+  o = vec4(mix(prev, cur, uBlend), 0.0, 0.0, 1.0);
+}`;
+
+  // Instanced grass blades with wind; lit like the PBR path (sun, shadows, sky, fog).
+  const GRASS_VS = `#version 300 es
+layout(location = 0) in vec2 aBlade;
+layout(location = 1) in vec4 aInst;
+layout(location = 2) in vec2 aInst2;
+uniform mat4 uViewProj;
+uniform mat4 uShadowMat0;
+uniform mat4 uShadowMat1;
+uniform vec3 uCamPos;
+uniform float uTime;
+uniform float uMaxDist;
+out vec3 vWorld;
+out vec3 vNormal;
+out float vT;
+out float vVar;
+out vec4 vShadow0;
+out vec4 vShadow1;
+void main() {
+  vec3 root = aInst.xyz;
+  float d = distance(root.xy, uCamPos.xy);
+  float fade = 1.0 - smoothstep(uMaxDist * 0.6, uMaxDist, d);
+  float h = aInst2.x * fade;
+  float t = aBlade.y;
+  vec2 dir = vec2(cos(aInst.w), sin(aInst.w));
+  vec3 side = vec3(dir, 0.0);
+  vec3 front = vec3(-dir.y, dir.x, 0.0);
+  float gust = sin(uTime * 1.6 + root.x * 0.31 + root.y * 0.23) * 0.6 + sin(uTime * 3.7 + root.x * 1.7) * 0.25;
+  float bend = t * t;
+  vec3 p = root + side * aBlade.x * (0.055 * (1.0 - t * 0.85)) * (0.6 + h)
+         + front * bend * h * 0.28
+         + vec3(0.55, 0.25, 0.0) * gust * bend * h * 0.5
+         + vec3(0.0, 0.0, t * h);
+  vWorld = p;
+  vNormal = normalize(front + vec3(0.0, 0.0, 0.5));
+  vT = t;
+  vVar = aInst2.y;
+  vShadow0 = uShadowMat0 * vec4(p, 1.0);
+  vShadow1 = uShadowMat1 * vec4(p, 1.0);
+  gl_Position = uViewProj * vec4(p, 1.0);
+}`;
+
+  const GRASS_FS = `#version 300 es
+precision highp float;
+precision highp sampler2DShadow;
+in vec3 vWorld;
+in vec3 vNormal;
+in float vT;
+in float vVar;
+in vec4 vShadow0;
+in vec4 vShadow1;
+uniform vec3 uColor;
+uniform vec3 uCamPos;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform sampler2DShadow uShadowMap0;
+uniform sampler2DShadow uShadowMap1;
+uniform float uShadowOn;
+uniform float uAmbient;
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+${SKY_GLSL}
+out vec4 outColor;
+float shadowAt(sampler2DShadow map, vec4 sp, out float inside) {
+  vec3 s = sp.xyz / sp.w * 0.5 + 0.5;
+  inside = step(0.0, min(min(s.x, 1.0 - s.x), min(s.y, 1.0 - s.y))) * step(s.z, 1.0);
+  return texture(map, s);
+}
+void main() {
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(uCamPos - vWorld);
+  if (dot(N, V) < 0.0) N = -N;
+  float in0, in1;
+  float sh = 1.0;
+  if (uShadowOn > 0.5) {
+    float s0 = shadowAt(uShadowMap0, vShadow0, in0);
+    float s1 = shadowAt(uShadowMap1, vShadow1, in1);
+    sh = in0 > 0.5 ? s0 : (in1 > 0.5 ? s1 : 1.0);
+  }
+  vec3 albedo = uColor * mix(0.55, 1.25, vT) * (0.8 + 0.4 * vVar);
+  float diffuse = max(dot(N, uSunDir), 0.0) * 0.75 + 0.25;
+  float translucency = pow(max(dot(-V, uSunDir), 0.0), 3.0) * 0.6 * vT;
+  vec3 irradiance = mix(uSkyGround, uSkyZenith, 0.6 + 0.4 * vT) * uAmbient;
+  vec3 color = albedo * (uSunColor * sh * (diffuse + translucency) / 3.14159 + irradiance * (0.45 + 0.55 * vT));
+  float dist = length(uCamPos - vWorld);
+  if (uFogDensity > 0.0) color = mix(color, uFogColor, 1.0 - exp(-uFogDensity * dist));
+  outColor = vec4(color, 1.0);
+}`;
+
   const FXAA_FS = `#version 300 es
 precision highp float;
 in vec2 vUV;
 uniform sampler2D uSrc;
 uniform vec2 uTexel;
+uniform float uSharpen;
 out vec4 o;
 void main() {
   vec3 rgbNW = texture(uSrc, vUV + vec2(-1.0, -1.0) * uTexel).rgb;
@@ -679,7 +918,11 @@ void main() {
   vec3 a = 0.5 * (texture(uSrc, vUV + dir * (1.0 / 3.0 - 0.5)).rgb + texture(uSrc, vUV + dir * (2.0 / 3.0 - 0.5)).rgb);
   vec3 b = a * 0.5 + 0.25 * (texture(uSrc, vUV - dir * 0.5).rgb + texture(uSrc, vUV + dir * 0.5).rgb);
   float lB = dot(b, luma);
-  o = vec4((lB < lMin || lB > lMax) ? a : b, 1.0);
+  vec3 c = (lB < lMin || lB > lMax) ? a : b;
+  // Light sharpening (unsharp mask) restores detail softened by FXAA and upscaling.
+  vec3 blur = (rgbNW + rgbNE + rgbSW + rgbSE) * 0.25;
+  c = clamp(c + (c - blur) * uSharpen, 0.0, 1.0);
+  o = vec4(c, 1.0);
 }`;
 
   // ===========================================================================
@@ -792,15 +1035,26 @@ void main() {
         this.fxaa = new Program(gl, FULLSCREEN_VS, FXAA_FS, 'fxaa');
         this.dof = new Program(gl, FULLSCREEN_VS, DOF_FS, 'dof');
         this.copy = new Program(gl, FULLSCREEN_VS, COPY_FS, 'copy');
+        this.godrays = new Program(gl, FULLSCREEN_VS, GODRAYS_FS, 'godrays');
+        this.lum = new Program(gl, FULLSCREEN_VS, LUM_FS, 'lum');
       }
+      this.grassProg = new Program(gl, GRASS_VS, GRASS_FS, 'grass');
+      // One shared per-instance matrix buffer, wired into every mesh VAO (locations 3-6).
+      this.instanceBuffer = gl.createBuffer();
+      this.instanceData = new Float32Array(16 * 256);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
+      this.frameNo = 0;
       this.emptyVao = gl.createVertexArray();
       this.white = this.makeSolidTexture([255, 255, 255, 255]);
       this.black = this.makeSolidTexture([0, 0, 0, 255]);
       const [shadowSize, shadowRadius] = QUALITY.shadow[settings.shadowQuality] || QUALITY.shadow.MEDIUM;
       this.shadowRadius = shadowRadius;
-      this.shadow = new Target(gl, Math.max(1, shadowSize), Math.max(1, shadowSize), { depth: true, compare: true });
+      // Cascade 0 covers the area near the camera at high texel density, cascade 1 the wider view.
+      this.cascadeRadii = [shadowRadius * 0.28, shadowRadius];
+      this.shadows = [0, 1].map(() => new Target(gl, Math.max(1, shadowSize), Math.max(1, shadowSize), { depth: true, compare: true }));
       this.shadowOn = shadowSize > 0;
-      this.shadowMat = M4.create();
+      this.shadowMats = [M4.create(), M4.create()];
       this.kernel = new Float32Array(36);
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2 * 2.618, r = Math.sqrt((i + 0.5) / 12);
@@ -860,6 +1114,12 @@ void main() {
       attrib(1, mesh.normal, 3);
       if (mesh.uv >= 0) attrib(2, mesh.uv, 2);
       else { gl.disableVertexAttribArray(2); gl.vertexAttrib2f(2, 0, 0); }
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      for (let c = 0; c < 4; c++) {
+        gl.enableVertexAttribArray(3 + c);
+        gl.vertexAttribPointer(3 + c, 4, gl.FLOAT, false, 64, c * 16);
+        gl.vertexAttribDivisor(3 + c, 1);
+      }
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       const IndexArray = mesh.indexType === 'uint16' ? Uint16Array : Uint32Array;
@@ -893,8 +1153,14 @@ void main() {
         dof: new Target(gl, hw, hh, { color: gl.RGBA16F }),
         final: new Target(gl, w, h, { color: gl.RGBA8 }),
         accum: new Target(gl, w, h, { color: gl.RGBA16F }),
+        rays: new Target(gl, hw, hh, { color: gl.RGBA16F }),
         bloom,
       };
+      if (!this.lumTargets) {
+        this.lumTargets = [new Target(gl, 1, 1, { color: gl.RGBA16F }), new Target(gl, 1, 1, { color: gl.RGBA16F })];
+        this.lumIndex = 0;
+        this.lumFresh = true;
+      }
     }
 
     setScale(s) {
@@ -923,10 +1189,23 @@ void main() {
       M4.invert(this.invViewProj, this.viewProj);
       const planes = frustumPlanes(this.viewProj);
 
-      // Shadow pass.
+      this.frameNo++;
+      const camPos = frame.camera.pos;
+      const camFwd = vNorm([-frame.camera.world[8], -frame.camera.world[9], -frame.camera.world[10]]);
+      // Screen-size culling: objects smaller than ~1 pixel are skipped (perspective only).
+      const pxScale = frame.camera.ortho ? 0 : this.proj[5] * h * 0.5;
+
+      // Shadow pass: near cascade every frame, far cascade every second frame.
       const sun = frame.sun;
       const shadowOn = this.shadowOn && sun.intensity > 0.01;
-      if (shadowOn) this.renderShadow(frame, sun);
+      if (shadowOn) {
+        const all = !this.shadowsReady || frame.resetHistory || frame.accumulating;
+        const R0 = this.cascadeRadii[0];
+        const nearFocus = vAdd(camPos, vScale(vNorm([camFwd[0], camFwd[1], camFwd[2] * 0.3]), R0 * 0.55));
+        this.renderShadow(frame, sun, 0, nearFocus);
+        if (all || this.frameNo % 2 === 0) this.renderShadow(frame, sun, 1, frame.shadowFocus);
+        this.shadowsReady = true;
+      }
 
       // Scene pass.
       if (direct) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h); }
@@ -939,13 +1218,17 @@ void main() {
 
       const p = this.pbr.use();
       p.m4('uViewProj', this.viewProj);
-      p.m4('uShadowMat', this.shadowMat);
-      p.f1('uNormalBias', shadowOn ? this.shadowRadius / this.shadow.w * 1.5 : 0);
+      p.m4('uShadowMat0', this.shadowMats[0]);
+      p.m4('uShadowMat1', this.shadowMats[1]);
+      const sw = this.shadows[0].w;
+      p.v2('uNormalBias', shadowOn ? this.cascadeRadii[0] / sw * 1.5 : 0, shadowOn ? this.cascadeRadii[1] / sw * 1.5 : 0);
+      p.v2('uShadowTexel', 1 / sw, 1 / sw);
+      p.f1('uTime', frame.time || 0);
+      p.f1('uInstanced', 0);
       p.v3('uCamPos', frame.camera.pos);
       p.v3('uSunDir', sun.dir);
       p.v3('uSunColor', vScale(sun.color, sun.intensity));
       p.f1('uShadowOn', shadowOn ? 1 : 0);
-      p.f1('uShadowTexel', 1 / this.shadow.w);
       const env = frame.env;
       p.v3('uSkyZenith', env.zenith); p.v3('uSkyHorizon', env.horizon); p.v3('uSkyGround', env.ground);
       p.f1('uAmbient', env.ambient);
@@ -953,24 +1236,28 @@ void main() {
       p.f1('uFogDensity', env.fogDensity);
       p.f1('uDirect', direct ? 1 : 0);
       p.f1('uExposure', env.exposure);
-      p.i1('uBaseTex', 0); p.i1('uNormalTex', 1); p.i1('uRoughTex', 2); p.i1('uEmitTex', 3); p.i1('uShadowMap', 4);
-      gl.activeTexture(gl.TEXTURE4);
-      gl.bindTexture(gl.TEXTURE_2D, this.shadow.depth);
+      p.i1('uBaseTex', 0); p.i1('uNormalTex', 1); p.i1('uRoughTex', 2); p.i1('uEmitTex', 3); p.i1('uShadowMap0', 4); p.i1('uShadowMap1', 5);
+      this.bindShadowMaps();
       this.uploadLights(p, frame.lights);
 
       const opaque = [], transparent = [];
-      const camPos = frame.camera.pos;
+      st.culled = 0;
       for (const item of frame.items) {
         if (!sphereInFrustum(planes, item.center, item.radius)) continue;
+        if (pxScale > 0) {
+          const d = vDist(item.center, camPos);
+          if (d > item.radius && (item.radius / d) * pxScale < 0.9) { st.culled++; continue; }
+        }
         if (item.material.blend) { item.sortKey = vDist(item.center, camPos); transparent.push(item); }
         else opaque.push(item);
       }
-      opaque.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex);
+      opaque.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex || a.first - b.first);
       transparent.sort((a, b) => b.sortKey - a.sortKey);
 
       gl.disable(gl.BLEND);
-      let lastMat = null;
-      for (const item of opaque) { this.drawItem(p, item, lastMat); lastMat = item.material; }
+      this.drawBatched(p, opaque, true);
+
+      if (this.grass && this.hdr && frame.grass !== false) this.drawGrass(frame, planes, shadowOn);
 
       // Sky fills untouched pixels at the far plane.
       gl.depthMask(false);
@@ -987,13 +1274,15 @@ void main() {
       s.v3('uSkyZenith', env.zenith); s.v3('uSkyHorizon', env.horizon); s.v3('uSkyGround', env.ground);
       s.f1('uDirect', direct ? 1 : 0);
       s.f1('uExposure', env.exposure);
+      s.f1('uTime', frame.time || 0);
+      s.f1('uClouds', env.clouds || 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       if (transparent.length) {
         p.use();
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        lastMat = null;
+        let lastMat = null;
         for (const item of transparent) { this.drawItem(p, item, lastMat); lastMat = item.material; }
         gl.disable(gl.BLEND);
       }
@@ -1058,6 +1347,8 @@ void main() {
       p.v3('uEmission', vScale(m.emission, m.emissionStrength));
       p.f1('uNormalStrength', m.normalStrength);
       p.f1('uBlend', m.blend ? 1 : 0);
+      p.f1('uDetail', m.detail || 0);
+      p.f1('uWater', m.water ? 1 : 0);
       const tex = m.gpuTextures;
       gl.uniform4i(p.loc('uTexFlags'), tex[0] ? 1 : 0, tex[1] ? 1 : 0, tex[2] ? 1 : 0, tex[3] ? 1 : 0);
       for (let i = 0; i < 4; i++) {
@@ -1080,19 +1371,72 @@ void main() {
       if (item.flash) this.bindMaterial(p, item.material);
     }
 
-    renderShadow(frame, sun) {
-      const gl = this.gl, R = this.shadowRadius;
-      const focus = frame.shadowFocus;
+    bindShadowMaps() {
+      const gl = this.gl;
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, this.shadows[0].depth);
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, this.shadows[1].depth);
+    }
+
+    // Draws items, merging repeated mesh + material pairs into one instanced draw call.
+    drawBatched(p, items, shade) {
+      const gl = this.gl;
+      let lastMat = null;
+      for (let i = 0; i < items.length;) {
+        const a = items[i];
+        let j = i + 1;
+        if (!a.flash) {
+          while (j < items.length) {
+            const b = items[j];
+            if (b.gpu !== a.gpu || b.first !== a.first || b.material !== a.material || b.flash) break;
+            j++;
+          }
+        }
+        const n = j - i;
+        if (n >= 2) {
+          if (shade && a.material !== lastMat) { this.bindMaterial(p, a.material); lastMat = a.material; }
+          if (shade) p.f1('uFlash', 0);
+          if (this.instanceData.length < n * 16) {
+            this.instanceData = new Float32Array(n * 16 * 2);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.instanceData.byteLength, gl.DYNAMIC_DRAW);
+          }
+          for (let k = 0; k < n; k++) this.instanceData.set(items[i + k].world, k * 16);
+          gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+          gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.instanceData, 0, n * 16);
+          p.f1('uInstanced', 1);
+          gl.bindVertexArray(a.gpu.vao);
+          gl.drawElementsInstanced(gl.TRIANGLES, a.count, a.gpu.indexType, a.first * a.gpu.indexSize, n);
+          p.f1('uInstanced', 0);
+          this.stats.draws++;
+          this.stats.instanced = (this.stats.instanced || 0) + n;
+          this.stats.tris += (a.count / 3) * n;
+        } else if (shade) {
+          this.drawItem(p, a, lastMat);
+          lastMat = a.material;
+        } else {
+          p.m4('uModel', a.world);
+          gl.bindVertexArray(a.gpu.vao);
+          gl.drawElements(gl.TRIANGLES, a.count, a.gpu.indexType, a.first * a.gpu.indexSize);
+        }
+        i = j;
+      }
+    }
+
+    renderShadow(frame, sun, cascade, focus) {
+      const gl = this.gl, R = this.cascadeRadii[cascade], target = this.shadows[cascade], mat = this.shadowMats[cascade];
       const dir = vScale(sun.dir, -1);
       const up = Math.abs(dir[2]) > 0.99 ? [0, 1, 0] : [0, 0, 1];
       const lightView = M4.lookAt(M4.create(), [0, 0, 0], dir, up);
       const c = M4.point(lightView, focus);
-      const texel = (2 * R) / this.shadow.w;
+      // Snap to whole texels so the shadow edges do not shimmer while moving.
+      const texel = (2 * R) / target.w;
       c[0] = Math.floor(c[0] / texel) * texel; c[1] = Math.floor(c[1] / texel) * texel;
-      const depthRange = R * 3;
+      const depthRange = this.shadowRadius * 3;
       const proj = M4.ortho(M4.create(), c[0] - R, c[0] + R, c[1] - R, c[1] + R, -c[2] - depthRange, -c[2] + depthRange);
-      M4.mul(this.shadowMat, proj, lightView);
-      this.shadow.bind();
+      M4.mul(mat, proj, lightView);
+      target.bind();
       gl.enable(gl.DEPTH_TEST);
       gl.depthMask(true);
       gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -1100,16 +1444,83 @@ void main() {
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(1.6, 3.0);
       const p = this.depthProg.use();
-      p.m4('uViewProj', this.shadowMat);
-      const planes = frustumPlanes(this.shadowMat);
+      p.m4('uViewProj', mat);
+      p.f1('uInstanced', 0);
+      const planes = frustumPlanes(mat);
+      const minRadius = texel * 0.75;
+      const list = [];
       for (const item of frame.items) {
         if (!item.castShadow || item.material.blend) continue;
+        if (item.radius < minRadius) continue;
         if (!sphereInFrustum(planes, item.center, item.radius)) continue;
-        p.m4('uModel', item.world);
-        gl.bindVertexArray(item.gpu.vao);
-        gl.drawElements(gl.TRIANGLES, item.count, item.gpu.indexType, item.first * item.gpu.indexSize);
+        list.push(item);
       }
+      list.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex || a.first - b.first);
+      this.drawBatched(p, list, false);
       gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
+
+    // grass: { data: Float32Array (x, y, z, rot, height, variation per blade), chunks: [{center, radius, start, count}], color }
+    setGrass(grass) {
+      const gl = this.gl;
+      if (this.grass) { gl.deleteBuffer(this.grass.buffer); gl.deleteVertexArray(this.grass.vao); }
+      this.grass = null;
+      if (!grass || !grass.chunks.length) return;
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const blade = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, blade);
+      // Triangle strip: three segments and a tip.
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, 0, 1, 0, -1, 0.33, 1, 0.33, -1, 0.66, 1, 0.66, 0, 1]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, grass.data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribDivisor(1, 1);
+      gl.enableVertexAttribArray(2);
+      gl.vertexAttribDivisor(2, 1);
+      gl.bindVertexArray(null);
+      this.grass = Object.assign({}, grass, { vao, buffer, blade });
+    }
+
+    drawGrass(frame, planes, shadowOn) {
+      const gl = this.gl, g = this.grass, env = frame.env, sun = frame.sun;
+      const q = this.grassProg.use();
+      q.m4('uViewProj', this.viewProj);
+      q.m4('uShadowMat0', this.shadowMats[0]);
+      q.m4('uShadowMat1', this.shadowMats[1]);
+      q.v3('uCamPos', frame.camera.pos);
+      q.f1('uTime', frame.time || 0);
+      q.f1('uMaxDist', g.maxDist);
+      q.v3('uColor', g.color);
+      q.v3('uSunDir', sun.dir);
+      q.v3('uSunColor', vScale(sun.color, sun.intensity));
+      q.f1('uShadowOn', shadowOn ? 1 : 0);
+      q.i1('uShadowMap0', 4); q.i1('uShadowMap1', 5);
+      q.f1('uAmbient', env.ambient);
+      q.v3('uFogColor', env.fogColor);
+      q.f1('uFogDensity', env.fogDensity);
+      q.v3('uSkyZenith', env.zenith); q.v3('uSkyHorizon', env.horizon); q.v3('uSkyGround', env.ground);
+      this.bindShadowMaps();
+      gl.disable(gl.CULL_FACE);
+      gl.bindVertexArray(g.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.buffer);
+      const cam = frame.camera.pos;
+      let blades = 0;
+      for (const c of g.chunks) {
+        if (Math.hypot(c.center[0] - cam[0], c.center[1] - cam[1]) - c.radius > g.maxDist) continue;
+        if (!sphereInFrustum(planes, c.center, c.radius)) continue;
+        // Point the per-blade attributes at this chunk's range of the buffer.
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 24, c.start * 24);
+        gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 24, c.start * 24 + 16);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 7, c.count);
+        this.stats.draws++;
+        blades += c.count;
+      }
+      this.stats.grass = blades;
+      this.stats.tris += blades * 5;
     }
 
     fullscreen(prog, target, w, h) {
@@ -1196,10 +1607,55 @@ void main() {
         this.fullscreen(d, T.dof);
       }
 
+      // Light shafts from the sun when it is in front of the camera.
+      let raysTex = this.black, raysColor = [0, 0, 0];
+      const sun = frame.sun;
+      if (st.godRays !== false && sun.intensity > 0.01 && sun.dir[2] > -0.05) {
+        const cp = frame.camera.pos;
+        const sp = [cp[0] + sun.dir[0] * 1000, cp[1] + sun.dir[1] * 1000, cp[2] + sun.dir[2] * 1000];
+        const vp = this.viewProj;
+        const cx = vp[0] * sp[0] + vp[4] * sp[1] + vp[8] * sp[2] + vp[12];
+        const cy = vp[1] * sp[0] + vp[5] * sp[1] + vp[9] * sp[2] + vp[13];
+        const cw = vp[3] * sp[0] + vp[7] * sp[1] + vp[11] * sp[2] + vp[15];
+        if (cw > 0) {
+          const u = cx / cw * 0.5 + 0.5, v = cy / cw * 0.5 + 0.5;
+          const edge = Math.max(Math.abs(u - 0.5), Math.abs(v - 0.5));
+          const fade = 1 - smoothstep(0.55, 1.1, edge);
+          if (fade > 0.01) {
+            const g = this.godrays.use();
+            bind(0, T.scene.tex); bind(1, T.scene.depth);
+            g.i1('uScene', 0); g.i1('uDepth', 1);
+            g.v2('uSunUV', u, v);
+            g.f1('uDensity', 0.85);
+            this.fullscreen(g, T.rays);
+            raysTex = T.rays.tex;
+            const k = 0.09 * fade * (st.godRays === undefined || st.godRays === true ? 1 : st.godRays);
+            raysColor = vScale(vLerp([1, 1, 1], sun.color, 0.6), k);
+          }
+        }
+      }
+
+      // Eye adaptation: average scene luminance, eased over time.
+      const autoExposure = film ? (film.autoExposure || 0) : (st.autoExposure === undefined ? 0.6 : st.autoExposure);
+      let lumTex = this.black;
+      if (autoExposure > 0) {
+        const prev = this.lumTargets[this.lumIndex], next = this.lumTargets[1 - this.lumIndex];
+        const l = this.lum.use();
+        bind(0, T.scene.tex); bind(1, prev.tex);
+        l.i1('uScene', 0); l.i1('uPrev', 1);
+        l.f1('uBlend', this.lumFresh || frame.resetHistory ? 1 : 0.04);
+        this.fullscreen(l, next);
+        this.lumIndex = 1 - this.lumIndex;
+        this.lumFresh = false;
+        lumTex = next.tex;
+      }
+
       const useFxaa = st.antiAliasing !== 'OFF';
       const c = this.composite.use();
-      bind(0, T.scene.tex); bind(1, bloomTex); bind(2, aoTex); bind(3, T.scene.depth); bind(4, T.dof.tex);
-      c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2); c.i1('uDepth', 3); c.i1('uDof', 4);
+      bind(0, T.scene.tex); bind(1, bloomTex); bind(2, aoTex); bind(3, T.scene.depth); bind(4, T.dof.tex); bind(5, raysTex); bind(6, lumTex);
+      c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2); c.i1('uDepth', 3); c.i1('uDof', 4); c.i1('uRays', 5); c.i1('uLum', 6);
+      c.v3('uRaysColor', raysColor);
+      c.f1('uAutoExposure', autoExposure);
       c.f1('uDofOn', dofOn ? 1 : 0);
       c.v4('uDofParams', dofParams);
       c.f1('uChromatic', film ? film.chromatic || 0 : 0);
@@ -1222,6 +1678,7 @@ void main() {
         bind(0, T.ldr.tex);
         f.i1('uSrc', 0);
         f.v2('uTexel', 1 / w, 1 / h);
+        f.f1('uSharpen', 0.22 + (1 - this.scale) * 0.8);
         this.fullscreen(f, output || null, this.canvas.width, this.canvas.height);
       } else {
         this.fullscreen(c, output || null, this.canvas.width, this.canvas.height);
@@ -1696,6 +2153,7 @@ void main() {
       this.settings = Object.assign({
         sky: 'AUTO', fogDensity: 0.004, bloom: 1, ssao: true, exposure: 1, shadowQuality: 'MEDIUM', antiAliasing: 'FXAA',
         resolutionScale: 1, targetFps: 60, dynamicResolution: true, maxDynamicLights: 8, builtinRules: true,
+        godRays: true, autoExposure: 0.6, clouds: true, grass: 'AUTO', surfaceDetail: true,
       }, data.settings || {});
       const params = new URLSearchParams(location.search);
       if (params.has('quality')) this.applyQualityOverride(params.get('quality'));
@@ -1713,8 +2171,8 @@ void main() {
 
     applyQualityOverride(q) {
       const presets = {
-        low: { shadowQuality: 'LOW', ssao: false, bloom: 0, antiAliasing: 'OFF', resolutionScale: 0.7 },
-        medium: { shadowQuality: 'MEDIUM', ssao: false, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 0.85 },
+        low: { shadowQuality: 'LOW', ssao: false, bloom: 0, antiAliasing: 'OFF', resolutionScale: 0.7, godRays: false, grass: 0 },
+        medium: { shadowQuality: 'MEDIUM', ssao: false, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 0.85, godRays: false },
         high: { shadowQuality: 'HIGH', ssao: true, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 1 },
         ultra: { shadowQuality: 'ULTRA', ssao: true, bloom: 1.2, antiAliasing: 'FXAA', resolutionScale: 1 },
       };
@@ -1742,6 +2200,13 @@ void main() {
         index: i,
         gpuTextures: [m.baseColorTexture, m.normalTexture, m.roughnessTexture, m.emissionTexture].map((ti) => (ti >= 0 ? textures[ti] : null)),
       }));
+      for (const m of this.materials) {
+        const name = (m.name || '').toLowerCase();
+        m.water = /water|ocean|lake|river|pond|\bsea\b|suv|daryo|ko'l/.test(name);
+        const emissive = (m.emissionStrength || 0) > 0.05 && Math.max(...m.emission) > 0.05;
+        // Procedural micro detail breaks up flat, untextured surfaces (stone, ground, walls).
+        m.detail = !this.settings.surfaceDetail || m.blend || m.water ? 0 : emissive ? 0.2 : m.baseColorTexture >= 0 ? 0.35 : 1;
+      }
       if (!this.materials.length) this.materials.push({ baseColor: [0.8, 0.8, 0.8, 1], metallic: 0, roughness: 0.6, emission: [0, 0, 0], emissionStrength: 0, normalStrength: 1, blend: false, doubleSided: true, gpuTextures: [null, null, null, null], index: 0 });
       this.meshes = d.meshes.map((m, i) => {
         progress(0.6 + 0.3 * (i + 1) / Math.max(1, d.meshes.length));
@@ -1788,6 +2253,7 @@ void main() {
       this.updateTransforms();
       this.computeBounds();
       this.buildPhysics();
+      if (!this.grassBuilt) { this.grassBuilt = true; this.setupGrass(); }
       this.setupEnvironment();
       this.setupPlayer();
       this.setupActors();
@@ -1946,7 +2412,90 @@ void main() {
         env.ambient = 1;
       }
       env.fogColor = env.horizon.slice();
+      env.clouds = this.settings.clouds && mode === 'PROCEDURAL' ? 0.6 : 0;
       this.env = env;
+    }
+
+    // Instanced grass on green, upward-facing static ground. Placement is seeded, so every run matches.
+    setupGrass() {
+      const st = this.settings;
+      const budgets = { OFF: 0, LOW: 0, MEDIUM: 14000, HIGH: 32000, ULTRA: 64000 };
+      let budget = st.grass === 'AUTO' || st.grass === true ? budgets[st.shadowQuality] || 0 : +st.grass || 0;
+      if (this.isTouch) budget = Math.min(budget, 12000);
+      if (!budget || !this.renderer.hdr) return;
+      const blocked = /water|lava|road|path|yo'l|sand|qum|rock|tosh|stone|wall|devor|roof/;
+      const tris = [];
+      let total = 0;
+      let color = [0, 0, 0], colorW = 0;
+      for (const n of this.nodes) {
+        if (!n.mesh || !n.visible || this.world === null) continue;
+        if (n.has && (n.has('PLAYER_CONTROLLER') || n.has('NPC_CONTROLLER') || n.has('RIGIDBODY') || n.has('DOOR'))) continue;
+        if (n.src.animation || blocked.test((n.name || '').toLowerCase())) continue;
+        for (const prim of n.mesh.primitives) {
+          const m = this.materials[prim.material];
+          if (!m || m.blend || m.water) continue;
+          const bc = m.baseColor;
+          if (!(bc[1] > bc[0] * 1.12 && bc[1] > bc[2] * 1.12) || blocked.test((m.name || '').toLowerCase())) continue;
+          const pos = n.mesh.positions, idx = n.mesh.indices;
+          for (let t = prim.first; t < prim.first + prim.count; t += 3) {
+            const pa = M4.point(n.world, [pos[idx[t] * 3], pos[idx[t] * 3 + 1], pos[idx[t] * 3 + 2]]);
+            const pb = M4.point(n.world, [pos[idx[t + 1] * 3], pos[idx[t + 1] * 3 + 1], pos[idx[t + 1] * 3 + 2]]);
+            const pc = M4.point(n.world, [pos[idx[t + 2] * 3], pos[idx[t + 2] * 3 + 1], pos[idx[t + 2] * 3 + 2]]);
+            const cr = vCross(vSub(pb, pa), vSub(pc, pa));
+            const len = Math.hypot(cr[0], cr[1], cr[2]);
+            if (len < 1e-6 || cr[2] / len < 0.8) continue;
+            const area = len * 0.5;
+            total += area;
+            tris.push({ pa, pb, pc, area, cum: total });
+            color = vAdd(color, vScale(bc.slice(0, 3), area)); colorW += area;
+          }
+        }
+      }
+      if (!tris.length || total < 1) return;
+      const count = Math.min(budget, Math.round(total * 26));
+      let seed = 1337;
+      const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+      const blades = [];
+      for (let i = 0; i < count; i++) {
+        const target = rnd() * total;
+        let lo = 0, hi = tris.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (tris[mid].cum < target) lo = mid + 1; else hi = mid; }
+        const tr = tris[lo];
+        let u = rnd(), v = rnd();
+        if (u + v > 1) { u = 1 - u; v = 1 - v; }
+        const p = [0, 1, 2].map((k) => tr.pa[k] + (tr.pb[k] - tr.pa[k]) * u + (tr.pc[k] - tr.pa[k]) * v);
+        // Skip spots covered by other geometry (rocks, buildings, props).
+        const hit = this.world.raycast([p[0], p[1], p[2] + 0.05], [0, 0, 1], 2.5);
+        if (hit) continue;
+        blades.push(p[0], p[1], p[2] - 0.02, rnd() * Math.PI * 2, 0.22 + rnd() * 0.3, rnd());
+      }
+      const n = blades.length / 6;
+      if (!n) return;
+      // Sort blades into 8 m chunks so whole chunks can be culled at once.
+      const CH = 8, buckets = new Map();
+      for (let i = 0; i < n; i++) {
+        const key = Math.floor(blades[i * 6] / CH) + ',' + Math.floor(blades[i * 6 + 1] / CH);
+        let list = buckets.get(key);
+        if (!list) buckets.set(key, (list = []));
+        list.push(i);
+      }
+      const data = new Float32Array(n * 6), chunks = [];
+      let o = 0;
+      for (const list of buckets.values()) {
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        const start = o;
+        for (const i of list) {
+          for (let k = 0; k < 6; k++) data[o * 6 + k] = blades[i * 6 + k];
+          for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], blades[i * 6 + k]); max[k] = Math.max(max[k], blades[i * 6 + k]); }
+          o++;
+        }
+        max[2] += 0.6;
+        const center = vScale(vAdd(min, max), 0.5);
+        chunks.push({ center, radius: vDist(min, max) * 0.5 + 0.3, start, count: list.length });
+      }
+      const avg = vScale(color, 1 / colorW);
+      this.renderer.setGrass({ data, chunks, color: vScale(avg, 0.85), maxDist: st.shadowQuality === 'ULTRA' ? 45 : 32 });
+      this.grassCount = n;
     }
 
     collectLights(camPos) {
@@ -3121,7 +3670,7 @@ void main() {
       }
       const frame = {
         film: cinematic || this.state === 'rendering' ? this.film : null,
-        accumulating: !!opts.accumulating, resetHistory: !!opts.resetHistory,
+        accumulating: !!opts.accumulating, resetHistory: !!opts.resetHistory, time: this.time,
         camera: {
           world, pos: camPos, ortho: camData.type === 'ORTHO', lens, near, far,
           proj: (aspect) => (camData.type === 'ORTHO'

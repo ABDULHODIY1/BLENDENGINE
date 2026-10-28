@@ -678,6 +678,7 @@ def _draw_build(layout, scene):
         (export, "include_debug_overlay", "Debug HUD", "CONSOLE"),
     ))
     box.prop(export, "export_web_player", text="3D Web Player", icon="WORLD", toggle=True)
+    box.prop(export, "include_project_files", text="+ .blend project", icon="BLENDER", toggle=True)
 
     if export.export_web_player:
         box = _section(layout, "Player Graphics", "SHADING_RENDERED")
@@ -691,6 +692,7 @@ def _draw_build(layout, scene):
             (export, "runtime_builtin_rules", "Rules", "CHECKMARK"),
         ))
 
+    layout.prop(export, "open_after_build", text="Play after build", icon="PLAY", toggle=True)
     _primary(layout, "blendengine.prepare_build", "Build Game", "EXPORT", scale=1.7)
 
 

@@ -24,12 +24,16 @@ Chrome, Edge, Firefox, Safari, Android WebView va iOS WKWebView'da. Runtime bitt
 
 **Render (realistik, lekin yengil)**
 - Fizikaga asoslangan shading (GGX / Smith / Schlick) — Principled BSDF'dan base color, metallic, roughness, emission, alpha, normal map va teksturalar.
-- Quyosh uchun yumshoq PCF soyalar, kamera atrofida texel-snapping bilan barqaror soya xaritasi.
+- Ikki kaskadli quyosh soyalari (yaqin kaskad har kadr, uzoq kaskad har 2-kadr), 12 nuqtali Poisson PCF, texel-snapping bilan barqaror.
+- Prosedural sirt detallari (makro/mikro shovqin, roughness o'zgarishi, masofa bilan so'nadigan bump) — teksturasiz sirtlar ham tabiiy ko'rinadi.
+- Suv materiali (nomida `water`/`suv`/`lake`...): animatsiyali to'lqin, Fresnel shaffoflik, osmon aksi.
+- Instanced o't (yashil, yuqoriga qaragan statik yerda avtomatik; shamol, quyosh nuri o'tishi, soyalar; sifatga qarab 14k–64k o't bargi, 8 m bo'laklar bilan culling).
+- Bulutli prosedural osmon, god rays (quyosh nurlari), ko'zning yorug'likka moslashuvi (auto exposure), FXAA + sharpen.
 - 16 tagacha point/spot yorug'lik (kameraga eng ta'sirlisi tanlanadi).
 - Prosedural osmon (quyosh balandligiga qarab kun/shom ranglari, quyosh diski) yoki World rangi.
 - Osmondan ambient va split-sum yaqinlashuvidagi aks ettirishlar, balandlik bilan susayuvchi tuman.
 - HDR pipeline: bloom, SSAO, ACES tone mapping, vinyetka, FXAA.
-- Frustum culling, material bo'yicha saralash, bir xil mesh'lar uchun bitta GPU bufer, dinamik resolution (FPS tushsa avtomatik pasayadi).
+- Real-time optimizatsiyalar: frustum culling, ekranda 1 pikseldan kichik obyektlarni o'tkazib yuborish, material bo'yicha saralash, bir xil geometriya eksportda bitta mesh'ga birlashtiriladi va **GPU instancing** bilan bitta draw call'da chiziladi (sahna va soya pass'larida), soyada mayda obyektlar tashlab yuboriladi, uzoq soya kaskadi kamroq yangilanadi, dinamik resolution (FPS tushsa avtomatik pasayadi).
 
 **Fizika**
 - Statik dunyo uchburchaklari fazoviy hash'da (katta shaharlar uchun ham tez).
@@ -84,8 +88,12 @@ Tez boshlash: *Film → Demo Film Sequence* — o'yinchi atrofida dolly-in va or
 
 1. BlendEngine'da o'yin yarating (masalan **Magic Create** yoki **3D Starter World**).
 2. **Ship** sahifasida: platformani tanlang, **3D Runtime Player** yoqilgan bo'lsin, kerak bo'lsa Sky / Exposure / Bloom / Fog / Ambient Occlusion ni sozlang.
-3. **Prepare Build Package** — paket `build_folder/<Package Name>/` ga yoziladi.
-4. `web_player/index.html` ni brauzerda oching.
+3. **Build Game** — paket `build_folder/<Package Name>/` ga yoziladi va o'yin darhol ochiladi. Natija — tayyor o'yin, `.py` fayl emas:
+   - `<Game>.exe` — Windows dasturi; `<Game>` — Linux dasturi; `<Game>.app` — macOS ilovasi;
+   - `<Game>.html` — o'yinning o'zi, bitta mustaqil fayl (runtime + sahna);
+   - `<Game>_web.zip` — itch.io yoki istalgan web hosting uchun;
+   - `.blend` loyiha va ishga tushirish skriptlari faqat **+ .blend project** yoqilganda qo'shiladi.
+4. Dasturlar o'yinni Edge/Chrome'ning ramkasiz oynasida ochadi (oddiy desktop o'yin kabi).
 
 Sifatni URL orqali almashtirish mumkin: `index.html?quality=low|medium|high|ultra`.
 

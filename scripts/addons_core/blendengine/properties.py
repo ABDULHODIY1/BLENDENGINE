@@ -769,6 +769,16 @@ class BE_ExportSettings(PropertyGroup):
     export_scene_package: bpy.props.BoolProperty(name="Scene Package", default=True)
     include_debug_overlay: bpy.props.BoolProperty(name="Debug Overlay", default=False)
     package_name: bpy.props.StringProperty(name="Package Name", default="BlendEngineBuild")
+    include_project_files: bpy.props.BoolProperty(
+        name="Include BlendEngine Project",
+        default=False,
+        description="Also write the .blend file and scripts to reopen the project in BlendEngine (not needed to play)",
+    )
+    open_after_build: bpy.props.BoolProperty(
+        name="Play After Build",
+        default=True,
+        description="Open the finished game in its own window as soon as the build is done",
+    )
     export_web_player: bpy.props.BoolProperty(
         name="3D Runtime Player",
         default=True,

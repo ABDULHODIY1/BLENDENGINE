@@ -4,6 +4,9 @@
 
 ### Engine
 
+- **Build Game = haqiqiy o'yin:** `.exe` (Windows), Linux dasturi, macOS `.app`, bitta faylli `<Game>.html` va web ZIP; build tugashi bilan o'yin ochiladi. `.blend`/`.py` fayllar faqat so'ralganda (`launchers/launcher.c`, `game_package.py`).
+- **Grafika:** ikki kaskadli soyalar, prosedural sirt detallari, suv, instanced o't, bulutlar, god rays, auto exposure, sharpen.
+- **Optimizatsiya:** GPU instancing (sahna + soya), eksportda geometriya hash bo'yicha mesh birlashtirish, sub-pixel culling, soyada mayda obyektlarni tashlash, uzoq kaskadni har 2-kadrda yangilash.
 - **3D Runtime (WebGL2):** `scripts/addons_core/blendengine/runtime_web/` — Blender'siz ishlaydigan mustaqil o'yin playeri: PBR (GGX), quyosh soyalari (PCF), point/spot yorug'liklar, prosedural osmon, tuman, HDR bloom, SSAO, ACES, FXAA, dinamik resolution.
 - **Fizika:** statik uchburchak dunyosi (spatial hash), personaj kontrolleri (qiyalik, zinapoya, yerga yopishish), ray cast, eshiklar, oddiy rigid body'lar.
 - **Gameplay:** 6 xil kontroller, NPC AI shablonlari, qurol/yaqin jang, behavior tizimi (hodisa/shart/amal), pickup va g'alaba qoidalari, gamepad, touch boshqaruv, WebAudio effektlar, `game_scripts.js` skript API.

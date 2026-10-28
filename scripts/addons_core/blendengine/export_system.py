@@ -10,7 +10,7 @@ import stat
 
 import bpy
 
-from . import performance, scene_export, utils
+from . import game_package, performance, scene_export, utils
 
 
 def _safe_name(value, fallback="BlendEngineBuild"):
@@ -434,7 +434,9 @@ def prepare_build_package(context):
     package_dir = os.path.join(build_root, package_name)
     os.makedirs(package_dir, exist_ok=True)
     is_desktop_target = project.target_platform in {"WINDOWS", "LINUX", "MACOS"}
-    writes_blend = is_desktop_target and (export.export_playable_project or export.export_scene_package)
+    # The .blend + Blender launch scripts are only for re-opening the project in BlendEngine.
+    include_project = getattr(export, "include_project_files", False)
+    writes_blend = is_desktop_target and include_project and (export.export_playable_project or export.export_scene_package)
 
     game_data = serialize_game_data(scene)
     manifest = {
@@ -486,7 +488,7 @@ def prepare_build_package(context):
         bpy.ops.wm.save_as_mainfile(filepath=blend_path, check_existing=False, copy=True)
         manifest["files"].append(package_name + ".blend")
 
-    if is_desktop_target:
+    if is_desktop_target and include_project:
         launcher_path = os.path.join(package_dir, "run_game.py")
         with open(launcher_path, "w", encoding="utf-8") as handle:
             handle.write(
@@ -540,35 +542,44 @@ def prepare_build_package(context):
         manifest["files"].append("run_game.sh")
         manifest["files"].extend(_write_desktop_launchers(package_dir, package_name))
 
+    web_dir = None
     if project.target_platform == "ANDROID":
         manifest["files"].extend(_write_android_project(context, package_dir, game_data, platform_config))
+        web_dir = os.path.join(package_dir, "android_project", "web_player")
     elif project.target_platform == "IOS":
         manifest["files"].extend(_write_ios_project(context, package_dir, game_data, platform_config))
+        web_dir = os.path.join(package_dir, "ios_project", "web_player")
     elif project.target_platform == "WEB" or export.export_web_player:
         # Desktop targets also get the standalone player: it runs in any browser without Blender.
         manifest["files"].extend(_web_runtime_files(context, package_dir, game_data))
+        web_dir = os.path.join(package_dir, "web_player")
+
+    # The finished game: one HTML file, Play launchers and an itch.io-ready zip.
+    game_file = None
+    if web_dir and os.path.isfile(os.path.join(web_dir, "index.html")):
+        game_file, game_files = game_package.finish_package(package_dir, web_dir, project.game_title or package_name, package_name)
+        manifest["files"].extend(game_files)
+        manifest["game"] = os.path.basename(game_file)
 
     readme_path = os.path.join(package_dir, "README.txt")
     with open(readme_path, "w", encoding="utf-8") as handle:
         handle.write(
             "%s\n\n"
-            "Desktop run:\n"
-            "  Linux:   ./run_game.sh\n"
-            "  Windows: run_game.bat\n"
-            "  macOS:   ./run_game.command\n\n"
-            "Standalone 3D player (no Blender needed):\n"
-            "  Open web_player/index.html in Chrome, Edge, Firefox or Safari.\n"
-            "  Add ?quality=low|medium|high|ultra to the URL to override graphics quality.\n"
-            "  Custom code goes in web_player/game_scripts.js (kept between exports).\n\n"
+            "PLAY THE GAME (no Blender needed):\n"
+            "  Windows: double-click %s.exe\n"
+            "  Linux:   run ./%s (or install the .desktop shortcut)\n"
+            "  macOS:   open %s.app\n"
+            "  Any OS:  open %s.html in Chrome, Edge, Firefox or Safari.\n"
+            "  %s_web.zip is ready to upload to itch.io or any web host.\n\n"
+            "Graphics: add ?quality=low|medium|high|ultra to the game URL to change quality.\n"
+            "Custom code: web_player/game_scripts.js (kept between exports).\n\n"
             "Controls:\n"
-            "  W/A/S/D move, Space jump, Shift sprint, F or Left Mouse attack, R or Right Mouse aim, E interact, Esc stop.\n\n"
-            "Platform export:\n"
-            "  Every target writes the 3D runtime to web_player/index.html.\n"
-            "  Android target writes android_project/build_android_apk.sh for Android Studio/SDK.\n"
-            "  iOS target writes ios_project files for Xcode signing/archive.\n\n"
-            "Optimization:\n"
-            "  This package includes editor_tools, multiplayer, runtime_optimization, and performance_budget data.\n"
-            % project.game_title
+            "  W/A/S/D move, Space jump, Shift sprint, Mouse look, Left Mouse / F attack, E use, Esc pause, F3 stats.\n"
+            "  Gamepads and touch screens work too.\n\n"
+            "Mobile:\n"
+            "  Android target writes android_project/ (build the APK with Android Studio).\n"
+            "  iOS target writes ios_project/ (sign and archive with Xcode).\n"
+            % (project.game_title, package_name, package_name, package_name, package_name, package_name)
         )
     manifest["files"].append("README.txt")
 
@@ -580,6 +591,7 @@ def prepare_build_package(context):
         "manifest": manifest_path,
         "game_data": data_path,
         "summary": build_profile_summary(scene),
+        "game_file": game_file,
     }
 
 
