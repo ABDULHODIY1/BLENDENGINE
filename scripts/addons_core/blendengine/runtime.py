@@ -57,7 +57,8 @@ def _component_enabled(obj, component_type):
     return component is not None and component.enabled
 
 
-def validate_scene(scene):
+def validate_scene(scene, film=False):
+    """Check the scene can run. film=True validates a film-only project (no player needed)."""
     result = ValidationResult()
 
     if scene is None:
@@ -72,7 +73,9 @@ def validate_scene(scene):
         result.errors.append("Set a scene camera before Test Run.")
 
     player = utils.find_player_object(scene)
-    if player is None:
+    if player is None and film:
+        result.info.append("Film project: no Player Controller needed.")
+    elif player is None:
         result.errors.append("Add a Player Controller to one object.")
     else:
         result.info.append("Player object: %s" % player.name)
@@ -83,7 +86,9 @@ def validate_scene(scene):
             result.warnings.append("Player walk speed is zero.")
 
     input_map = scene.blendengine_input_map
-    if not input_map.bindings:
+    if not input_map.bindings and film:
+        result.info.append("Film project: no input bindings needed.")
+    elif not input_map.bindings:
         result.errors.append("Create input bindings before Test Run.")
     else:
         action_names = {binding.action for binding in input_map.bindings}

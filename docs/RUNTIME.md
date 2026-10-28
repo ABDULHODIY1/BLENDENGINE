@@ -49,6 +49,37 @@ Chrome, Edge, Firefox, Safari, Android WebView va iOS WKWebView'da. Runtime bitt
 - Protsedural WebAudio tovush effektlari (asset fayl kerak emas).
 - Menyu, pauza, g'alaba / mag'lubiyat ekranlari, F3 — ishlash statistikasi.
 
+## Kino ishlab chiqish (Film Studio)
+
+![Runtime'dagi kino kadri: 2.39:1 letterbox va fokus chuqurligi](images/runtime_film_shot.png)
+
+BlendEngine bitta loyihadan **o'yin**, **film** yoki **cutscene'li o'yin** chiqaradi. Kino uchun ikki yo'l bor:
+
+| Yo'l | Sifat | Qachon |
+|---|---|---|
+| **Blender Film Render** (`Film` paneli → *Render Film*) | Cycles (path tracing) yoki Eevee, H.264 MP4 | Final film, maksimal realizm |
+| **Runtime film** (`web_player`) | Real-time PBR + kino post-effektlar, offline sub-sample yig'ish | Tez preview, brauzerda tomosha, cutscene |
+
+**Timeline (Sequencer).** Blender'dagi obyekt va kamera keyframe'lari, kamera lens (zoom) animatsiyasi har kadr "bake" qilinadi.
+Timeline marker'iga bog'langan kameralar (`Ctrl+B` yoki *Cut To Camera Here*) — kamera almashinuvlari (shot'lar).
+
+**Film ko'rinishi.** Letterbox (1.85 / 2.39), Blender kamerasidagi DOF (fokus obyekti/masofa, f-stop, lens, sensor),
+motion blur (shutter), film grain, chromatic aberration, vinyetka, kontrast, to'yinganlik, rang harorati.
+
+**Runtime'da render.** Menyudagi *Render film (PNG)* har kadr uchun `Runtime Film Samples` ta jitter'langan sub-kadrni
+shutter bo'ylab yig'adi (haqiqiy motion blur + anti-aliasing) va kadrlarni PNG ketma-ketligi sifatida ZIP'ga saqlaydi
+(real vaqtdan mustaqil, deterministik). ZIP ichidagi README'da MP4 qilish uchun `ffmpeg` buyrug'i bor.
+*Record video (WebM)* esa ijroni real vaqtda yozib oladi.
+
+**O'yin ichida.** `Start Cutscene` behavior amali timeline'ni cutscene sifatida ijro etadi (Esc/Space/Fire — o'tkazib yuborish),
+so'ng o'yinchi va NPC'lar joyiga qaytadi. Animatsiyali proplar (platforma, eshik, ventilyator) o'yin davomida aylanib turadi;
+collider'li animatsiyali obyektlar kinematik to'siq bo'lib, ustida turgan o'yinchini olib yuradi.
+
+**Film-only loyiha.** `Film` panelida *Player Starts As = Film* — Player Controller shart emas; eksport qilingan player
+"Play film" tugmasi bilan ochiladi (yoki istalgan paketda `index.html?mode=film`).
+
+Tez boshlash: *Film → Demo Film Sequence* — o'yinchi atrofida dolly-in va orbit shot'lari (168 kadr) yaratadi.
+
 ## Ishlatish
 
 1. BlendEngine'da o'yin yarating (masalan **Magic Create** yoki **3D Starter World**).
@@ -86,6 +117,10 @@ blender --background --factory-startup --python tests/runtime_web/export_templat
 
 # Brauzerda gameplay testi (Node.js + Playwright)
 node tests/runtime_web/gameplay_test.js /tmp/be/basic/web_player /tmp/be/shooter/web_player
+
+# Film testi (sequencer, kamera almashinuvi, PNG/ZIP render)
+blender --background --factory-startup --python tests/runtime_web/export_templates.py -- /tmp/be film
+node tests/runtime_web/film_test.js /tmp/be/film/web_player
 ```
 
 ## Cheklovlar
@@ -98,3 +133,6 @@ Halollik uchun: quyidagilar hozircha **yo'q**.
 - Rigid body'lar sfera sifatida hisoblanadi (aylanish va constraint'lar yo'q).
 - Multiplayer sozlamalari eksport qilinadi, lekin tarmoq kodi runtime'da yo'q.
 - Bitta sahna eksport qilinadi; `LOAD_SCENE` amali joriy darajani qayta boshlaydi.
+- Runtime film'da motion blur kamera va obyekt harakatidan sub-kadrlar orqali olinadi; deformatsiyalanuvchi mesh'lar (skelet, shape key) harakatlanmaydi.
+- Runtime ovozni yozib olmaydi; ovoz/montaj uchun Blender Video Sequencer'dan foydalaning.
+- Bu Unreal Engine o'rnini bosmaydi: Nanite/Lumen darajasidagi geometriya va global yoritish yo'q. Final kino sifati uchun Blender Film Render (Cycles) ishlatiladi.

@@ -28,6 +28,9 @@ Repozitoriy Blender manba daraxti va build vositalarini o'z ichiga oladi. O'ying
 Har bir eksport endi Blender'siz ishlaydigan, bog'liqliksiz **WebGL2 3D o'yin playerini** (`web_player/index.html`) yaratadi:
 PBR shading, yumshoq soyalar, prosedural osmon, bloom, SSAO, ACES tone mapping, FXAA, dinamik resolution,
 personaj fizikasi, NPC AI, qurollar, no-code behavior tizimi, gamepad va telefon uchun touch boshqaruv.
+**Kino ham ishlab chiqariladi:** Blender timeline'idagi animatsiya va kamera shot'lari runtime'da film/cutscene sifatida ijro etiladi
+(letterbox, DOF, motion blur, film grain), runtime'da PNG/WebM render yoki *Film → Render Film* bilan Cycles/Eevee'da MP4.
+
 Batafsil: [docs/RUNTIME.md](docs/RUNTIME.md).
 
 ## Manba tuzilmasi

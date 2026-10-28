@@ -9,7 +9,9 @@
 - **Gameplay:** 6 xil kontroller, NPC AI shablonlari, qurol/yaqin jang, behavior tizimi (hodisa/shart/amal), pickup va g'alaba qoidalari, gamepad, touch boshqaruv, WebAudio effektlar, `game_scripts.js` skript API.
 - **Eksport:** `scene_export.py` — mesh (welded split normals, UV, material guruhlari), Principled BSDF materiallar, teksturalar (sifatga qarab kichraytiriladi), yorug'lik, kamera, World. Web, Android, iOS va Desktop paketlari endi 3D playerni o'z ichiga oladi.
 - **Editor Test Run:** keshlar, Ground BVH va sweep-and-prune bilan 2–3 barobar tezroq qadam; o'yinchi relyef balandligini kuzatadi.
-- **Testlar:** `tests/python/blendengine_scene_export_test.py`, `tests/runtime_web/` (headless eksport + Playwright gameplay testi).
+- **Film Studio:** Blender timeline animatsiyasi va kamera marker'lari bake qilinadi; runtime sequencer (film rejimi va o'yin ichidagi cutscene'lar), kino post-effektlar (DOF, motion blur, letterbox, grain, chromatic aberration, gradatsiya), sub-kadr yig'uvchi offline PNG/ZIP render, WebM yozuv; Blender'da *Render Film* (Cycles/Eevee → MP4), *Cinematic Camera*, *Cut To Camera*, *Demo Film Sequence*.
+- **Animatsiyali proplar:** o'yin davomida aylanadi; collider'li animatsiyali obyektlar kinematik platforma bo'lib o'yinchini olib yuradi.
+- **Testlar:** `tests/python/blendengine_scene_export_test.py`, `tests/runtime_web/` (headless eksport, Playwright gameplay va film testlari).
 
 ### Documentation
 

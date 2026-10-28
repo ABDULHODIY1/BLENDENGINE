@@ -15,6 +15,7 @@ Bu belgilar hujjatlar holatini bildiradi; mahsulot funksiyalari yoki testlar muv
 - [x] Mustaqil WebGL2 3D runtime: PBR, soyalar, post-processing, fizika, AI, behavior tizimi ([docs/RUNTIME.md](docs/RUNTIME.md)).
 - [x] Barcha platforma paketlariga 3D player qo'shildi.
 - [x] Editor Test Run tezlashtirildi.
+- [x] Film Studio: timeline sequencer, kino post-effektlar, runtime va Blender (Cycles/Eevee) film render.
 
 ## Taklif etilgan keyingi ishlar
 
@@ -22,6 +23,7 @@ Bu belgilar hujjatlar holatini bildiradi; mahsulot funksiyalari yoki testlar muv
 - [ ] Point/spot yorug'lik soyalari, lightmap bake.
 - [ ] Tarmoq multiplayer runtime.
 - [ ] Bir nechta sahna va sahnalar orasida o'tish.
+- [ ] Runtime film'da ovoz yo'lagi va subtitrlar.
 
 - [ ] Platformalar bo‘yicha build yo‘riqnomasini aniqlashtirish.
 - [ ] Blenderdan farqlarni qayta chiqariladigan misollarda ko‘rsatish.

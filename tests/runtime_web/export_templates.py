@@ -2,7 +2,7 @@
 #
 # Export BlendEngine templates as standalone 3D web packages (headless).
 #
-#   blender --background --factory-startup --python tests/runtime_web/export_templates.py -- <out_dir> [basic|shooter|2d ...]
+#   blender --background --factory-startup --python tests/runtime_web/export_templates.py -- <out_dir> [basic|shooter|2d|film ...]
 #   python tests/runtime_web/export_templates.py -- <out_dir> basic      (with the bpy module)
 #
 # Each template is written to <out_dir>/<name>/web_player/index.html.
@@ -22,13 +22,15 @@ TEMPLATES = {
     "basic": "generate_basic_template",
     "shooter": "generate_cyberpunk_shooter_template",
     "2d": "generate_2d_template",
+    # 3D Starter World plus the two-shot demo film sequence.
+    "film": "generate_basic_template",
 }
 
 
 def main():
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if not args:
-        print(__doc__ or "usage: -- <out_dir> [basic|shooter|2d ...]")
+        print(__doc__ or "usage: -- <out_dir> [basic|shooter|2d|film ...]")
         return 1
     out_dir = os.path.abspath(args[0])
     names = args[1:] or ["basic"]
@@ -36,6 +38,8 @@ def main():
     for name in names:
         bpy.ops.wm.read_homefile(use_empty=True)
         getattr(bpy.ops.blendengine, TEMPLATES[name])()
+        if name == "film":
+            bpy.ops.blendengine.create_demo_sequence()
         scene = bpy.context.scene
         scene.blendengine_project.target_platform = "WEB"
         scene.blendengine_project.build_folder = out_dir

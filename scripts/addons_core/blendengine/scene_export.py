@@ -469,14 +469,28 @@ def _camera_data(obj, scene):
             "near": float(camera.clip_start),
             "far": float(camera.clip_end),
         }
-    fov_x = float(camera.angle_x if camera.sensor_fit != "VERTICAL" else camera.angle)
-    fov_y = 2.0 * math.atan(math.tan(fov_x * 0.5) / aspect) if camera.sensor_fit != "VERTICAL" else float(camera.angle_y)
+    dof = camera.dof
     return {
         "type": "PERSP",
-        "fovY": max(0.2, min(2.6, fov_y)),
+        "fovY": _camera_fov_y(camera, aspect),
         "near": max(0.01, float(camera.clip_start)),
         "far": max(10.0, float(camera.clip_end)),
+        "lens": float(camera.lens),
+        "sensor": float(camera.sensor_width),
+        "dof": {
+            "enabled": bool(dof.use_dof),
+            "focusDistance": float(dof.focus_distance),
+            "focusObject": dof.focus_object.name if dof.focus_object is not None else "",
+            "fstop": float(dof.aperture_fstop),
+        },
     }
+
+
+def _camera_fov_y(camera, aspect):
+    if camera.sensor_fit == "VERTICAL":
+        return max(0.05, min(2.6, float(camera.angle_y)))
+    fov_x = float(camera.angle_x)
+    return max(0.05, min(2.6, 2.0 * math.atan(math.tan(fov_x * 0.5) / aspect)))
 
 
 def _world_data(scene):
@@ -527,7 +541,88 @@ def _blocks_movement(obj, game_entry):
     return bool(optimization.get("static_object")) and not optimization.get("dynamic_object")
 
 
-def collect_scene(context, scene, game_data, texture_quality="MEDIUM"):
+MAX_BAKED_FRAMES = 3600
+
+
+def _export_parent(obj, node_index):
+    # Cameras are exported as roots in world space so the runtime camera rig and
+    # the sequencer can drive them directly.
+    if obj.type == "CAMERA" or obj.parent is None or obj.parent.name not in node_index:
+        return None
+    return obj.parent
+
+
+def _is_animated(id_data):
+    animation = getattr(id_data, "animation_data", None)
+    if animation is None:
+        return False
+    return animation.action is not None or bool(getattr(animation, "drivers", None)) or bool(animation.nla_tracks)
+
+
+def _animated_objects(objects):
+    """Objects whose transform (or camera lens) changes over the timeline."""
+    animated = set()
+    for obj in objects:
+        if _is_animated(obj) or obj.constraints or (obj.type == "CAMERA" and _is_animated(obj.data)):
+            animated.add(obj.name)
+    changed = True
+    while changed:  # children of animated parents move too
+        changed = False
+        for obj in objects:
+            if obj.name not in animated and obj.parent is not None and obj.parent.name in animated:
+                animated.add(obj.name)
+                changed = True
+    return animated
+
+
+def bake_timeline(scene, exported, node_index):
+    """Sample animated transforms every frame. Returns (timeline, tracks by node index)."""
+    animated = _animated_objects(exported)
+    start, end = scene.frame_start, scene.frame_end
+    end = min(end, start + MAX_BAKED_FRAMES - 1)
+    fps = scene.render.fps / max(scene.render.fps_base, 1e-6)
+    markers = []
+    for marker in sorted(scene.timeline_markers, key=lambda m: m.frame):
+        if marker.camera is not None and marker.camera.name in node_index:
+            markers.append({"frame": int(marker.frame), "camera": node_index[marker.camera.name], "name": marker.name})
+    timeline = {
+        "frameStart": int(start),
+        "frameEnd": int(end),
+        "fps": float(fps),
+        "cameraMarkers": markers,
+    }
+    if not animated:
+        return timeline, {}
+    objects = [obj for obj in exported if obj.name in animated]
+    tracks = {obj.name: {"position": [], "rotation": [], "scale": [], "fovY": []} for obj in objects}
+    render = scene.render
+    aspect = max(1e-6, (render.resolution_x * render.pixel_aspect_x) / max(1e-6, render.resolution_y * render.pixel_aspect_y))
+    current = scene.frame_current
+    try:
+        for frame in range(start, end + 1):
+            scene.frame_set(frame)
+            for obj in objects:
+                parent = _export_parent(obj, node_index)
+                local = obj.matrix_world if parent is None else parent.matrix_world.inverted_safe() @ obj.matrix_world
+                location, rotation, scale = local.decompose()
+                track = tracks[obj.name]
+                track["position"].extend(round(float(v), 5) for v in location)
+                track["rotation"].extend(round(float(v), 6) for v in (rotation.x, rotation.y, rotation.z, rotation.w))
+                track["scale"].extend(round(float(v), 5) for v in scale)
+                if obj.type == "CAMERA" and obj.data.type != "ORTHO":
+                    track["fovY"].append(round(_camera_fov_y(obj.data, aspect), 6))
+    finally:
+        scene.frame_set(current)
+    result = {}
+    for obj in objects:
+        track = tracks[obj.name]
+        if not track["fovY"]:
+            del track["fovY"]
+        result[node_index[obj.name]] = track
+    return timeline, result
+
+
+def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_animation=True):
     """Build the runtime scene dict and binary buffer for a scene."""
     if np is None:
         raise RuntimeError("numpy is required to export meshes")
@@ -629,7 +724,7 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM"):
         node_index[obj.name] = len(node_index)
 
     for obj in exported:
-        parent = obj.parent if obj.parent is not None and obj.parent.name in node_index else None
+        parent = _export_parent(obj, node_index)
         local = obj.matrix_world if parent is None else parent.matrix_world.inverted_safe() @ obj.matrix_world
         game_entry = _object_game_entry(obj, objects_by_name)
         node = {
@@ -656,6 +751,11 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM"):
             node["camera"] = _camera_data(obj, scene)
         nodes.append(node)
 
+    timeline = {"frameStart": scene.frame_start, "frameEnd": scene.frame_end, "fps": float(scene.render.fps), "cameraMarkers": []}
+    if bake_animation:
+        timeline, tracks = bake_timeline(scene, exported, node_index)
+        for index, track in tracks.items():
+            nodes[index]["animation"] = track
     camera_index = node_index.get(scene.camera.name, -1) if scene.camera is not None else -1
     view = scene.view_settings
     return {
@@ -668,6 +768,7 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM"):
         "nodes": nodes,
         "camera": camera_index,
         "world": _world_data(scene),
+        "timeline": timeline,
         "colorManagement": {
             "viewTransform": view.view_transform,
             "look": view.look,
@@ -697,6 +798,28 @@ def runtime_settings(scene):
         "dynamicResolution": bool(optimization.dynamic_resolution),
         "maxDynamicLights": int(profile.max_dynamic_lights),
         "builtinRules": export.runtime_builtin_rules,
+        "film": film_settings(scene),
+    }
+
+
+def film_settings(scene):
+    film = getattr(scene, "blendengine_film", None)
+    if film is None:
+        return {}
+    return {
+        "playMode": film.play_mode,
+        "loopProps": film.animated_props_loop,
+        "letterbox": 0.0 if film.letterbox == "NONE" else float(film.letterbox),
+        "dof": film.depth_of_field,
+        "motionBlur": film.motion_blur,
+        "grain": film.film_grain,
+        "chromatic": film.chromatic_aberration,
+        "vignette": film.vignette,
+        "contrast": film.contrast,
+        "saturation": film.saturation,
+        "temperature": film.temperature,
+        "samples": film.render_samples,
+        "resolution": [scene.render.resolution_x, scene.render.resolution_y],
     }
 
 
@@ -714,7 +837,9 @@ def write_scene_script(path, scene_dict, binary):
 def export_scene_package(context, scene, game_data, directory):
     """Export scene_data.js into directory and return (files, stats)."""
     texture_quality = scene.blendengine_quality_profile.texture_quality
-    scene_dict, binary = collect_scene(context, scene, game_data, texture_quality=texture_quality)
+    film = getattr(scene, "blendengine_film", None)
+    bake = film.export_animation if film is not None else True
+    scene_dict, binary = collect_scene(context, scene, game_data, texture_quality=texture_quality, bake_animation=bake)
     scene_dict["settings"] = runtime_settings(scene)
     write_scene_script(os.path.join(directory, "scene_data.js"), scene_dict, binary)
     stats = {

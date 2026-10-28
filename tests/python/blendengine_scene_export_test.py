@@ -41,6 +41,7 @@ class SceneExportTest(unittest.TestCase):
         except ValueError:
             pass  # Already registered by a previous run in this session.
         bpy.ops.blendengine.generate_basic_template()
+        bpy.ops.blendengine.create_demo_sequence()
         scene = bpy.context.scene
         cls.tmp = tempfile.mkdtemp(prefix="blendengine_export_")
         scene.blendengine_project.target_platform = "WEB"
@@ -105,6 +106,20 @@ class SceneExportTest(unittest.TestCase):
         coins = [node for node in self.data["nodes"] if node["game"] and node["game"]["tag"] == "Coin"]
         self.assertEqual(len(coins), 6)
         self.assertTrue(all(node["visible"] for node in coins))
+
+    def test_timeline_and_camera_shots(self):
+        timeline = self.data["timeline"]
+        self.assertEqual((timeline["frameStart"], timeline["frameEnd"]), (1, 168))
+        self.assertEqual([m["frame"] for m in timeline["cameraMarkers"]], [1, 73])
+        nodes = self.data["nodes"]
+        dolly = next(n for n in nodes if n["name"] == "BE_Shot_Dolly")
+        self.assertEqual(dolly["parent"], -1)
+        self.assertEqual(len(dolly["animation"]["position"]), 168 * 3)
+        self.assertEqual(len(dolly["animation"]["rotation"]), 168 * 4)
+        fov = dolly["animation"]["fovY"]
+        self.assertGreater(fov[0], fov[-1])  # lens animates from 28mm to 40mm
+        self.assertTrue(dolly["camera"]["dof"]["enabled"])
+        self.assertEqual(self.data["settings"]["film"]["letterbox"], 2.39)
 
     def test_materials(self):
         materials = {m["name"]: m for m in self.data["materials"]}

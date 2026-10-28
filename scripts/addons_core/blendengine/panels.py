@@ -34,6 +34,7 @@ class TOPBAR_MT_blendengine(Menu):
         else:
             layout.operator("blendengine.test_run_scene", text="Run Game", icon="PLAY")
         layout.operator("blendengine.prepare_build", text="Build", icon="EXPORT")
+        layout.operator("blendengine.render_film", text="Render Film", icon="RENDER_ANIMATION")
         layout.separator()
         layout.operator("blendengine.optimize_for_one_gb", text="1GB Auto Optimize", icon="MOD_SIMPLIFY")
         layout.operator("blendengine.analyze_scene_performance", text="Analyze Project", icon="INFO")

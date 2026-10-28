@@ -1126,6 +1126,82 @@ class BE_MultiplayerSettings(PropertyGroup):
     port: bpy.props.IntProperty(name="Port", default=7777, min=1, max=65535)
 
 
+class BE_FilmSettings(PropertyGroup):
+    """Cinematic and film-making settings shared by the runtime and Blender film renders."""
+
+    play_mode: bpy.props.EnumProperty(
+        name="Player Starts As",
+        items=(
+            ("GAME", "Game", "The exported player starts the game; the timeline plays as cutscenes"),
+            ("FILM", "Film", "The exported player is a film player: it plays the timeline from start to end"),
+        ),
+        default="GAME",
+    )
+    export_animation: bpy.props.BoolProperty(
+        name="Export Timeline Animation",
+        default=True,
+        description="Bake object, camera and lens animation plus camera markers for the runtime sequencer",
+    )
+    animated_props_loop: bpy.props.BoolProperty(
+        name="Loop Animated Props In Game",
+        default=True,
+        description="Objects animated in Blender (platforms, doors, fans) keep looping their animation during gameplay",
+    )
+    letterbox: bpy.props.EnumProperty(
+        name="Letterbox",
+        items=(
+            ("NONE", "None", "Full frame"),
+            ("1.85", "1.85:1", "Flat widescreen"),
+            ("2.39", "2.39:1", "Anamorphic scope"),
+        ),
+        default="2.39",
+    )
+    depth_of_field: bpy.props.BoolProperty(name="Depth of Field", default=True, description="Use the camera's Blender DOF settings in film playback")
+    motion_blur: bpy.props.FloatProperty(name="Motion Blur", default=0.5, min=0.0, max=1.0, description="Shutter fraction (0.5 = 180 degree shutter)")
+    film_grain: bpy.props.FloatProperty(name="Film Grain", default=0.035, min=0.0, max=0.3)
+    chromatic_aberration: bpy.props.FloatProperty(name="Chromatic Aberration", default=0.15, min=0.0, max=1.0)
+    vignette: bpy.props.FloatProperty(name="Vignette", default=0.45, min=0.0, max=1.5)
+    contrast: bpy.props.FloatProperty(name="Contrast", default=1.05, min=0.5, max=2.0)
+    saturation: bpy.props.FloatProperty(name="Saturation", default=1.0, min=0.0, max=2.0)
+    temperature: bpy.props.FloatProperty(name="Temperature", default=0.0, min=-1.0, max=1.0, description="Negative is cooler, positive is warmer")
+    render_samples: bpy.props.IntProperty(
+        name="Runtime Film Samples",
+        default=16,
+        min=1,
+        max=256,
+        description="Sub-frame samples accumulated per frame when the runtime renders a film (anti-aliasing and true motion blur)",
+    )
+    film_engine: bpy.props.EnumProperty(
+        name="Blender Film Engine",
+        items=(
+            ("EEVEE", "Eevee", "Fast real-time engine for previews and stylised films"),
+            ("CYCLES", "Cycles", "Path tracer for final, physically accurate films"),
+        ),
+        default="EEVEE",
+    )
+    film_samples: bpy.props.IntProperty(name="Render Samples", default=64, min=1, max=8192)
+    film_resolution: bpy.props.EnumProperty(
+        name="Resolution",
+        items=(
+            ("720", "1280 x 720", "HD"),
+            ("1080", "1920 x 1080", "Full HD"),
+            ("1440", "2560 x 1440", "QHD"),
+            ("2160", "3840 x 2160", "4K UHD"),
+            ("SCENE", "Scene Settings", "Keep the scene's own render resolution"),
+        ),
+        default="1080",
+    )
+    film_quality: bpy.props.EnumProperty(
+        name="Video Quality",
+        items=(
+            ("MEDIUM", "Medium", "Smaller file"),
+            ("HIGH", "High", "Good default"),
+            ("PERC_LOSSLESS", "Near Lossless", "Largest files, for editing"),
+        ),
+        default="HIGH",
+    )
+
+
 classes = (
     BE_GameEvent,
     BE_GameCondition,
@@ -1152,6 +1228,7 @@ classes = (
     BE_PerformanceReport,
     BE_EditorToolSettings,
     BE_MultiplayerSettings,
+    BE_FilmSettings,
 )
 
 
@@ -1168,6 +1245,7 @@ def register():
     bpy.types.Scene.blendengine_performance_report = bpy.props.PointerProperty(type=BE_PerformanceReport)
     bpy.types.Scene.blendengine_editor = bpy.props.PointerProperty(type=BE_EditorToolSettings)
     bpy.types.Scene.blendengine_multiplayer = bpy.props.PointerProperty(type=BE_MultiplayerSettings)
+    bpy.types.Scene.blendengine_film = bpy.props.PointerProperty(type=BE_FilmSettings)
     bpy.types.Object.blendengine_object = bpy.props.PointerProperty(type=BE_ObjectSettings)
 
 
@@ -1182,6 +1260,7 @@ def unregister():
         "blendengine_performance_report",
         "blendengine_editor",
         "blendengine_multiplayer",
+        "blendengine_film",
     ):
         if hasattr(bpy.types.Scene, attr):
             delattr(bpy.types.Scene, attr)

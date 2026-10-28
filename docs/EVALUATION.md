@@ -14,8 +14,10 @@ Quyidagi 3D runtime o'lchovlari aniq muhit bilan qayd etilgan; boshqa yo'nalishl
 | Ssenariy | `tests/runtime_web/export_templates.py` bilan eksport qilingan 3D Starter World va Cyberpunk Zombie Shooter |
 | Eksport vaqti | Starter: ~0.06 s (52 mesh, 6 809 uchburchak); Shooter: ~0.2 s (83 mesh, 57 360 uchburchak) |
 | Gameplay testi | `tests/runtime_web/gameplay_test.js` — 13/13 tekshiruv o'tdi |
-| Eksport testi | `tests/python/blendengine_scene_export_test.py` — 7/7 o'tdi |
-| Editor Test Run qadami (120 kadr o'rtachasi) | Starter: 3.2 → 1.5 ms; Shooter: 4.4 → 1.5 ms (`bpy` headless, viewport chizishsiz) |
+| Film testi | `tests/runtime_web/film_test.js` — 7/7 o'tdi (kamera almashinuvi, The End, 3 kadr × 6 sub-sample PNG/ZIP) |
+| Blender Film Render | Cycles CPU, 4 sample, 320×180, 6 kadr → H.264 MP4 (~8 s, `ffprobe` bilan tekshirildi); Eevee bu konteynerda GPU/EGL yo'qligi sababli sinalmadi |
+| Eksport testi | `tests/python/blendengine_scene_export_test.py` — 8/8 o'tdi |
+| Editor Test Run qadami (120 kadr o'rtachasi) | Starter: 3.2 → 1.3 ms; Shooter: 4.4 → 1.3 ms (`bpy` headless, viewport chizishsiz) |
 | Cheklov | FPS qiymatlari dasturiy renderda olingan va haqiqiy GPU'dagi tezlikni ko'rsatmaydi; haqiqiy qurilmalarda o'lchanmagan |
 
 ## Nima o‘lchanadi?

@@ -963,7 +963,8 @@ class BE_OT_prepare_build(Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        result = runtime.validate_scene(context.scene)
+        film = getattr(context.scene, "blendengine_film", None)
+        result = runtime.validate_scene(context.scene, film=film is not None and film.play_mode == "FILM")
         print("[BlendEngine] Build profile: " + export_system.build_profile_summary(context.scene))
         for message in result.all_messages():
             print("[BlendEngine] " + message)

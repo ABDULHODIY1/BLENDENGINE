@@ -538,23 +538,122 @@ in vec2 vUV;
 uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform sampler2D uAO;
+uniform sampler2D uDepth;
+uniform sampler2D uDof;
 uniform float uBloomStrength;
 uniform float uAOStrength;
 uniform float uExposure;
 uniform float uVignette;
 uniform vec3 uTint;
+uniform float uChromatic;
+uniform float uMotionBlur;
+uniform mat4 uInvViewProj;
+uniform mat4 uPrevViewProj;
+uniform float uDofOn;
+uniform vec4 uDofParams;
+uniform float uContrast;
+uniform float uSaturation;
+uniform float uTemperature;
+uniform float uLetterbox;
+uniform float uAspect;
 ${SKY_GLSL}
 out vec4 o;
+float linearDepth(float d) {
+  // Converted with the inverse projection packed in uDofParams.w (near) and the far plane in z.
+  float n = uDofParams.w, f = uDofParams.z;
+  float z = d * 2.0 - 1.0;
+  return 2.0 * n * f / (f + n - z * (f - n));
+}
+vec3 sceneColor(vec2 uv) {
+  if (uChromatic <= 0.0) return texture(uScene, uv).rgb;
+  vec2 dir = (uv - 0.5) * uChromatic * 0.012;
+  return vec3(texture(uScene, uv + dir).r, texture(uScene, uv).g, texture(uScene, uv - dir).b);
+}
 void main() {
-  vec3 c = texture(uScene, vUV).rgb;
+  vec3 c = sceneColor(vUV);
+  float d = texture(uDepth, vUV).r;
+  if (uMotionBlur > 0.0 && d < 1.0) {
+    // Camera motion blur by reprojecting this pixel into the previous frame.
+    vec4 w = uInvViewProj * vec4(vUV * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec4 prev = uPrevViewProj * vec4(w.xyz / w.w, 1.0);
+    vec2 vel = (vUV - (prev.xy / prev.w * 0.5 + 0.5)) * uMotionBlur;
+    vel = clamp(vel, vec2(-0.04), vec2(0.04));
+    vec3 acc = c;
+    for (int i = 1; i < 8; i++) acc += sceneColor(vUV - vel * (float(i) / 7.0 - 0.5));
+    c = acc / 8.0;
+  }
+  if (uDofOn > 0.5) {
+    float D = linearDepth(d);
+    float coc = abs(uDofParams.x * (D - uDofParams.y) / max(D, 1e-3));
+    c = mix(c, texture(uDof, vUV).rgb, smoothstep(0.6, 2.5, coc));
+  }
   float ao = texture(uAO, vUV).r;
   c *= mix(1.0, ao, uAOStrength);
   c += texture(uBloom, vUV).rgb * uBloomStrength;
   c *= uExposure * uTint;
+  c *= vec3(1.0 + uTemperature * 0.12, 1.0, 1.0 - uTemperature * 0.12);
   c = toneMap(c);
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(l), c, uSaturation);
+  c = clamp((c - 0.5) * uContrast + 0.5, 0.0, 1.0);
   vec2 v = vUV - 0.5;
   c *= 1.0 - uVignette * dot(v, v) * 1.6;
+  if (uLetterbox > 0.0 && uAspect < uLetterbox) {
+    float bar = 0.5 * (1.0 - uAspect / uLetterbox);
+    if (vUV.y < bar || vUV.y > 1.0 - bar) c = vec3(0.0);
+  }
   o = vec4(toSRGB(c), 1.0);
+}`;
+
+  // Depth of field gather: a golden-angle disc whose radius follows the circle of confusion.
+  const DOF_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform vec2 uTexel;
+uniform vec4 uDofParams;
+uniform float uMaxCoc;
+out vec4 o;
+float linearDepth(float d) {
+  float n = uDofParams.w, f = uDofParams.z;
+  float z = d * 2.0 - 1.0;
+  return 2.0 * n * f / (f + n - z * (f - n));
+}
+float cocAt(vec2 uv) {
+  float D = linearDepth(texture(uDepth, uv).r);
+  return min(abs(uDofParams.x * (D - uDofParams.y) / max(D, 1e-3)), uMaxCoc);
+}
+void main() {
+  float coc = cocAt(vUV);
+  vec3 sum = texture(uScene, vUV).rgb;
+  float wsum = 1.0;
+  for (int i = 1; i < 40; i++) {
+    float r = sqrt(float(i) / 40.0) * coc;
+    float a = float(i) * 2.39996;
+    vec2 uv = vUV + vec2(cos(a), sin(a)) * r * uTexel;
+    float sc = cocAt(uv);
+    float w = smoothstep(r - 1.0, r + 1.0, max(sc, coc * 0.5));
+    sum += texture(uScene, uv).rgb * w;
+    wsum += w;
+  }
+  o = vec4(sum / wsum, 1.0);
+}`;
+
+  // Weighted copy used to accumulate film sub-frames and to present them with grain.
+  const COPY_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uSrc;
+uniform float uWeight;
+uniform float uGrain;
+uniform float uTime;
+out vec4 o;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233)) + uTime * 17.17) * 43758.5453); }
+void main() {
+  vec3 c = texture(uSrc, vUV).rgb * uWeight;
+  if (uGrain > 0.0) c += (hash(gl_FragCoord.xy) - 0.5) * uGrain * (1.0 - c * 0.6);
+  o = vec4(c, 1.0);
 }`;
 
   const FXAA_FS = `#version 300 es
@@ -691,6 +790,8 @@ void main() {
         this.blur = new Program(gl, FULLSCREEN_VS, BLUR_FS, 'blur');
         this.composite = new Program(gl, FULLSCREEN_VS, COMPOSITE_FS, 'composite');
         this.fxaa = new Program(gl, FULLSCREEN_VS, FXAA_FS, 'fxaa');
+        this.dof = new Program(gl, FULLSCREEN_VS, DOF_FS, 'dof');
+        this.copy = new Program(gl, FULLSCREEN_VS, COPY_FS, 'copy');
       }
       this.emptyVao = gl.createVertexArray();
       this.white = this.makeSolidTexture([255, 255, 255, 255]);
@@ -717,6 +818,9 @@ void main() {
       this.proj = M4.create();
       this.invProj = M4.create();
       this.invViewProj = M4.create();
+      this.prevViewProj = null;
+      this.fixedSize = null;
+      this.jitter = [0, 0];
       this.lightData = { pos: new Float32Array(64), color: new Float32Array(64), spot: new Float32Array(64), inner: new Float32Array(16) };
     }
 
@@ -766,8 +870,8 @@ void main() {
 
     resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const cw = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
-      const ch = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+      const cw = this.fixedSize ? this.fixedSize[0] : Math.max(1, Math.round(this.canvas.clientWidth * dpr));
+      const ch = this.fixedSize ? this.fixedSize[1] : Math.max(1, Math.round(this.canvas.clientHeight * dpr));
       if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
       const w = Math.max(1, Math.round(cw * this.scale)), h = Math.max(1, Math.round(ch * this.scale));
       if (!this.hdr || (this.size[0] === w && this.size[1] === h && this.targets)) { this.size = [w, h]; return; }
@@ -786,6 +890,9 @@ void main() {
         ldr: new Target(gl, w, h, { color: gl.RGBA8 }),
         ao: new Target(gl, hw, hh, { color: gl.RGBA8 }),
         aoBlur: new Target(gl, hw, hh, { color: gl.RGBA8 }),
+        dof: new Target(gl, hw, hh, { color: gl.RGBA16F }),
+        final: new Target(gl, w, h, { color: gl.RGBA8 }),
+        accum: new Target(gl, w, h, { color: gl.RGBA16F }),
         bloom,
       };
     }
@@ -796,7 +903,8 @@ void main() {
     }
 
     // frame: { camera: {world, proj, pos}, items, sun, env, lights, flash }
-    render(frame) {
+    // output: a Target to receive the final image (film accumulation) or null for the canvas.
+    render(frame, output) {
       const gl = this.gl, st = this.stats;
       st.draws = 0; st.tris = 0;
       this.resize();
@@ -804,7 +912,13 @@ void main() {
       const direct = !this.hdr;
       M4.invert(this.view, frame.camera.world);
       M4.copy(this.proj, frame.camera.proj(w / h));
+      if (this.jitter[0] || this.jitter[1]) {
+        // Sub-pixel jitter for accumulated anti-aliasing (works for both projections).
+        const jx = this.jitter[0] * 2 / w, jy = this.jitter[1] * 2 / h;
+        if (this.proj[15] === 0) { this.proj[8] -= jx; this.proj[9] -= jy; } else { this.proj[12] += jx; this.proj[13] += jy; }
+      }
       M4.mul(this.viewProj, this.proj, this.view);
+      if (!this.prevViewProj || frame.resetHistory) this.prevViewProj = M4.copy(M4.create(), this.viewProj);
       M4.invert(this.invProj, this.proj);
       M4.invert(this.invViewProj, this.viewProj);
       const planes = frustumPlanes(this.viewProj);
@@ -885,7 +999,37 @@ void main() {
       }
       gl.depthMask(true);
 
-      if (!direct) this.postProcess(frame, w, h);
+      if (!direct) this.postProcess(frame, w, h, output);
+      M4.copy(this.prevViewProj, this.viewProj);
+    }
+
+    // Film accumulation: clear, add weighted sub-frames, then present with grain.
+    beginAccumulation() {
+      const T = this.targets;
+      T.accum.bind();
+      this.gl.clearColor(0, 0, 0, 1);
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    }
+    addSample(weight) {
+      const gl = this.gl, T = this.targets, c = this.copy.use();
+      gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, T.final.tex);
+      c.i1('uSrc', 0); c.f1('uWeight', weight); c.f1('uGrain', 0); c.f1('uTime', 0);
+      this.fullscreen(c, T.accum);
+      gl.disable(gl.BLEND);
+      gl.enable(gl.DEPTH_TEST);
+    }
+    presentAccumulation(grain, time) {
+      const gl = this.gl, T = this.targets, c = this.copy.use();
+      gl.disable(gl.DEPTH_TEST);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, T.accum.tex);
+      c.i1('uSrc', 0); c.f1('uWeight', 1); c.f1('uGrain', grain); c.f1('uTime', time);
+      this.fullscreen(c, null, this.canvas.width, this.canvas.height);
+      gl.enable(gl.DEPTH_TEST);
     }
 
     uploadLights(p, lights) {
@@ -976,7 +1120,7 @@ void main() {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    postProcess(frame, w, h) {
+    postProcess(frame, w, h, output) {
       const gl = this.gl, T = this.targets, st = this.settings;
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.CULL_FACE);
@@ -1034,14 +1178,43 @@ void main() {
         bloomTex = chain[0].tex;
       }
 
+      // Cinematic depth of field (circle of confusion from the camera's lens settings).
+      const film = frame.film || null;
+      const lens = frame.camera.lens;
+      let dofParams = [0, 10, 100, 0.1];
+      const dofOn = !!(film && film.dof && lens && lens.dof && lens.dof.enabled && lens.fstop > 0);
+      if (dofOn) {
+        const f = lens.lens / 1000, S = Math.max(lens.focus, f * 1.5), A = f / lens.fstop;
+        const pxPerMetre = w / (lens.sensor / 1000);
+        dofParams = [A * f / (S - f) * pxPerMetre, S, frame.camera.far, frame.camera.near];
+        const d = this.dof.use();
+        bind(0, T.scene.tex); bind(1, T.scene.depth);
+        d.i1('uScene', 0); d.i1('uDepth', 1);
+        d.v2('uTexel', 1 / w, 1 / h);
+        d.v4('uDofParams', dofParams);
+        d.f1('uMaxCoc', Math.max(4, w / 90));
+        this.fullscreen(d, T.dof);
+      }
+
       const useFxaa = st.antiAliasing !== 'OFF';
       const c = this.composite.use();
-      bind(0, T.scene.tex); bind(1, bloomTex); bind(2, aoTex);
-      c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2);
+      bind(0, T.scene.tex); bind(1, bloomTex); bind(2, aoTex); bind(3, T.scene.depth); bind(4, T.dof.tex);
+      c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2); c.i1('uDepth', 3); c.i1('uDof', 4);
+      c.f1('uDofOn', dofOn ? 1 : 0);
+      c.v4('uDofParams', dofParams);
+      c.f1('uChromatic', film ? film.chromatic || 0 : 0);
+      c.f1('uMotionBlur', film && !frame.accumulating ? film.motionBlur || 0 : 0);
+      c.m4('uInvViewProj', this.invViewProj);
+      c.m4('uPrevViewProj', this.prevViewProj);
+      c.f1('uContrast', film ? film.contrast || 1 : 1);
+      c.f1('uSaturation', film ? (film.saturation === undefined ? 1 : film.saturation) : 1);
+      c.f1('uTemperature', film ? film.temperature || 0 : 0);
+      c.f1('uLetterbox', film ? film.letterbox || 0 : 0);
+      c.f1('uAspect', w / h);
       c.f1('uBloomStrength', st.bloom > 0 ? st.bloom * 0.08 : 0);
       c.f1('uAOStrength', st.ssao ? 0.85 : 0);
       c.f1('uExposure', frame.env.exposure);
-      c.f1('uVignette', 0.35);
+      c.f1('uVignette', film && film.vignette !== undefined ? film.vignette : 0.35);
       c.v3('uTint', frame.tint || [1, 1, 1]);
       if (useFxaa) {
         this.fullscreen(c, T.ldr);
@@ -1049,9 +1222,9 @@ void main() {
         bind(0, T.ldr.tex);
         f.i1('uSrc', 0);
         f.v2('uTexel', 1 / w, 1 / h);
-        this.fullscreen(f, null, this.canvas.width, this.canvas.height);
+        this.fullscreen(f, output || null, this.canvas.width, this.canvas.height);
       } else {
-        this.fullscreen(c, null, this.canvas.width, this.canvas.height);
+        this.fullscreen(c, output || null, this.canvas.width, this.canvas.height);
       }
       gl.depthMask(true);
       gl.enable(gl.DEPTH_TEST);
@@ -1619,6 +1792,7 @@ void main() {
       this.setupPlayer();
       this.setupActors();
       this.setupBodies();
+      this.setupTimeline();
 
       this.time = 0;
       this.timers = new Map();
@@ -1720,6 +1894,8 @@ void main() {
         const opt = g.optimization || {};
         if (n.has('PLAYER_CONTROLLER') || n.has('NPC_CONTROLLER') || opt.dynamic_object || n.has('RIGIDBODY') || n.has('DOOR')) dynamicNames.add(n.name);
       }
+      // Timeline-animated objects move, so they collide as kinematic boxes instead.
+      for (const n of this.nodes) if (n.src.animation) dynamicNames.add(n.name);
       let blocking = this.nodes.filter((n) => n.mesh && n.src.blocking && !dynamicNames.has(n.name));
       if (!blocking.length) {
         // Scenes without colliders: every visible static mesh blocks movement.
@@ -1894,6 +2070,175 @@ void main() {
       }
     }
 
+    // ----------------------------------------------------------------- timeline
+    // Blender animation is baked per frame by the exporter; the sequencer plays it
+    // as cutscenes / films and loops animated props during gameplay.
+    setupTimeline() {
+      const tl = this.data.timeline || {};
+      this.timeline = { frameStart: tl.frameStart || 1, frameEnd: tl.frameEnd || 1, fps: tl.fps || 24, cameraMarkers: tl.cameraMarkers || [] };
+      this.film = Object.assign({
+        playMode: 'GAME', loopProps: true, letterbox: 2.39, dof: true, motionBlur: 0.5, grain: 0.035, chromatic: 0.15,
+        vignette: 0.45, contrast: 1.05, saturation: 1, temperature: 0, samples: 16, resolution: [1920, 1080],
+      }, this.settings.film || {});
+      if (new URLSearchParams(location.search).get('mode') === 'film') this.film.playMode = 'FILM';
+      this.animated = this.nodes.filter((n) => n.src.animation && n.src.animation.position.length >= 3);
+      for (const n of this.animated) { n.track = n.src.animation; n.trackFrames = n.track.position.length / 3; }
+      this.hasCinematic = this.animated.length > 0 || this.timeline.cameraMarkers.length > 0;
+      this.kinematic = this.animated.filter((n) => n.mesh && n.src.blocking).map((n) => ({ node: n, box: this.nodeAABB(n), last: n.worldPos }));
+      this.cinematic = null;
+      this.activeCamera = null;
+    }
+
+    sampleNode(n, frame) {
+      const t = n.track, count = n.trackFrames;
+      const f = clamp(frame - this.timeline.frameStart, 0, count - 1);
+      const i0 = Math.floor(f), i1 = Math.min(i0 + 1, count - 1), k = f - i0;
+      const P = t.position, R = t.rotation, S = t.scale;
+      n.position = [lerp(P[i0 * 3], P[i1 * 3], k), lerp(P[i0 * 3 + 1], P[i1 * 3 + 1], k), lerp(P[i0 * 3 + 2], P[i1 * 3 + 2], k)];
+      const q0 = [R[i0 * 4], R[i0 * 4 + 1], R[i0 * 4 + 2], R[i0 * 4 + 3]];
+      let q1 = [R[i1 * 4], R[i1 * 4 + 1], R[i1 * 4 + 2], R[i1 * 4 + 3]];
+      if (q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3] < 0) q1 = q1.map((v) => -v);
+      const q = [lerp(q0[0], q1[0], k), lerp(q0[1], q1[1], k), lerp(q0[2], q1[2], k), lerp(q0[3], q1[3], k)];
+      const ql = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+      n.rotation = q.map((v) => v / ql);
+      n.scale = [lerp(S[i0 * 3], S[i1 * 3], k), lerp(S[i0 * 3 + 1], S[i1 * 3 + 1], k), lerp(S[i0 * 3 + 2], S[i1 * 3 + 2], k)];
+      if (t.fovY) n.animFov = lerp(t.fovY[i0], t.fovY[i1], k);
+    }
+
+    applyTimeline(frame, filter) {
+      for (const n of this.animated) if (!filter || filter(n)) this.sampleNode(n, frame);
+    }
+
+    cameraForFrame(frame) {
+      let cam = this.cameraNode;
+      for (const m of this.timeline.cameraMarkers) if (m.frame <= frame + 1e-4 && this.nodes[m.camera]) cam = this.nodes[m.camera];
+      return cam;
+    }
+
+    // Animated props keep looping during gameplay; moving colliders carry the player.
+    updateAnimatedProps() {
+      if (!this.film.loopProps || !this.animated.length) return;
+      const tl = this.timeline, length = Math.max(1, tl.frameEnd - tl.frameStart + 1);
+      const frame = tl.frameStart + ((this.time * tl.fps) % length);
+      const gameplay = (n) => n !== this.player && !n.actor && n !== this.cameraNode && !n.body && !this.doors.some((d) => d.node === n);
+      this.applyTimeline(frame, gameplay);
+      if (!this.kinematic.length) return;
+      this.updateTransforms();
+      for (const k of this.kinematic) {
+        const pos = k.node.worldPos, delta = vSub(pos, k.last);
+        k.last = pos;
+        k.box = this.nodeAABB(k.node);
+        if (this.player && this.player.ctrl && this.player.ctrl.groundOwner === k.node.index) this.player.position = vAdd(this.player.position, delta);
+        for (const a of this.actors) if (a.actor.groundOwner === k.node.index) a.position = vAdd(a.position, delta);
+      }
+    }
+
+    startCinematic(opts = {}) {
+      if (!this.hasCinematic) { this.toast('This scene has no timeline animation or camera shots'); return false; }
+      const saved = opts.film ? null : [this.player, ...this.actors, ...this.animated].filter(Boolean).map((n) => [n, n.position.slice(), n.rotation.slice(), n.scale.slice()]);
+      this.cinematic = { time: 0, film: !!opts.film, saved, onEnd: opts.onEnd || null, realtime: opts.realtime !== false };
+      this.state = 'cinematic';
+      this.input.releaseLock();
+      this.ui.hud.classList.add('hidden');
+      this.renderer.prevViewProj = null;
+      this.applyTimeline(this.timeline.frameStart);
+      this.updateTransforms();
+      this.activeCamera = this.cameraForFrame(this.timeline.frameStart);
+      this.emit('cutscene', 'start');
+      return true;
+    }
+
+    cinematicFrame() { return this.timeline.frameStart + this.cinematic.time * this.timeline.fps; }
+
+    updateCinematic(dt) {
+      const c = this.cinematic;
+      c.time += dt;
+      const frame = this.cinematicFrame();
+      this.applyTimeline(frame);
+      this.updateTransforms();
+      this.activeCamera = this.cameraForFrame(frame);
+      const skip = this.input.pressed('PAUSE') || this.input.pressed('JUMP') || this.input.pressed('ATTACK');
+      if ((!c.film && skip) || frame > this.timeline.frameEnd + 0.999) this.endCinematic();
+    }
+
+    endCinematic() {
+      const c = this.cinematic;
+      if (!c) return;
+      this.cinematic = null;
+      this.activeCamera = null;
+      if (c.saved) for (const [n, p, r, sc] of c.saved) { n.position = p; n.rotation = r; n.scale = sc; }
+      this.updateTransforms();
+      this.renderer.prevViewProj = null;
+      this.emit('cutscene', 'end');
+      if (c.film) {
+        this.state = 'ended';
+        this.ui.showMenu('The End', `${this.project.title || 'Film'} · ${((this.timeline.frameEnd - this.timeline.frameStart + 1) / this.timeline.fps).toFixed(1)} s`, 'Watch again', true);
+      } else {
+        this.state = 'playing';
+        this.ui.hud.classList.remove('hidden');
+      }
+      if (c.onEnd) c.onEnd();
+    }
+
+    // Offline film render: every frame accumulates jittered sub-frame samples across the
+    // shutter (anti-aliasing + true motion blur for everything that moves), then the
+    // frame is written as PNG into a ZIP. Deterministic and independent of real-time speed.
+    async renderFilm(opts = {}) {
+      const r = this.renderer, tl = this.timeline, film = this.film;
+      if (!r.hdr) throw new Error('Film rendering needs float render targets (EXT_color_buffer_float).');
+      const [W, H] = opts.size || film.resolution || [1920, 1080];
+      const samples = Math.max(1, Math.round(opts.samples || film.samples || 16));
+      const first = opts.frameStart || tl.frameStart, last = opts.frameEnd || tl.frameEnd;
+      const halton = (i, b) => { let f = 1, x = 0; while (i > 0) { f /= b; x += f * (i % b); i = Math.floor(i / b); } return x; };
+      const saved = { fixed: r.fixedSize, scale: r.scale, dyn: this.settings.dynamicResolution, state: this.state };
+      r.fixedSize = [W, H]; r.scale = 1; this.settings.dynamicResolution = false; r.resize();
+      this.startCinematic({ film: true, realtime: false });
+      this.state = 'rendering';
+      this.cancelRender = false;
+      const files = [];
+      try {
+        for (let f = first; f <= last && !this.cancelRender; f++) {
+          r.beginAccumulation();
+          for (let sIdx = 0; sIdx < samples; sIdx++) {
+            const sub = samples > 1 ? ((sIdx + 0.5) / samples - 0.5) * film.motionBlur : 0;
+            this.applyTimeline(f + sub);
+            this.updateTransforms();
+            this.activeCamera = this.cameraForFrame(f);
+            r.jitter = samples > 1 ? [halton(sIdx + 1, 2) - 0.5, halton(sIdx + 1, 3) - 0.5] : [0, 0];
+            this.renderFrame({ output: r.targets.final, accumulating: true, resetHistory: true });
+            r.addSample(1 / samples);
+          }
+          r.jitter = [0, 0];
+          r.presentAccumulation(film.grain, f);
+          const blob = await new Promise((res) => this.ui.canvas.toBlob(res, 'image/png'));
+          files.push({ name: `frame_${String(f).padStart(5, '0')}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+          if (opts.onProgress) opts.onProgress((f - first + 1) / (last - first + 1), f);
+          await new Promise((res) => setTimeout(res, 0));
+        }
+      } finally {
+        r.fixedSize = saved.fixed; r.scale = saved.scale; this.settings.dynamicResolution = saved.dyn; r.resize();
+        this.cinematic = null; this.activeCamera = null; this.state = 'ended';
+      }
+      files.push({ name: 'README.txt', data: new TextEncoder().encode(
+        `${this.project.title || 'BlendEngine film'}\n${files.length} frames at ${tl.fps} fps, ${W}x${H}, ${samples} samples per frame.\n\n` +
+        `Make a video:\n  ffmpeg -framerate ${tl.fps} -start_number ${first} -i frame_%05d.png -c:v libx264 -pix_fmt yuv420p -crf 16 film.mp4\n`) });
+      return makeZip(files);
+    }
+
+    // Real-time WebM recording of the film playback (MediaRecorder).
+    recordFilm(onDone) {
+      const canvas = this.ui.canvas;
+      if (!canvas.captureStream || !window.MediaRecorder) { this.toast('Video recording is not supported in this browser'); return false; }
+      const stream = canvas.captureStream(Math.round(this.timeline.fps));
+      const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      const recorder = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 16e6 } : undefined);
+      const chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = () => onDone(new Blob(chunks, { type: 'video/webm' }));
+      recorder.start(250);
+      return this.startCinematic({ film: true, onEnd: () => recorder.stop() });
+    }
+
     // ------------------------------------------------------------- rigid bodies
     // Simple dynamic props approximated by spheres: gravity, bounce, friction,
     // pushing by characters, body-body separation and sleeping.
@@ -1970,6 +2315,7 @@ void main() {
       const r = c.radius;
       const wasGrounded = c.grounded;
       c.grounded = false;
+      c.groundOwner = -1;
       const contacts = [];
       const levels = c.height > r * 4 ? [r, c.height * 0.5, c.height - r] : [r, Math.max(r, c.height - r)];
       for (let s = 0; s < steps; s++) {
@@ -1986,6 +2332,7 @@ void main() {
               if (ct.n[2] > 0.65 && li === 0) {
                 // Walkable ground: push straight up so slopes do not slide.
                 c.grounded = true;
+                c.groundOwner = ct.owner;
                 if (c.vel[2] < 0) c.vel[2] = 0;
               } else {
                 const vn = vDot(c.vel, ct.n);
@@ -2015,6 +2362,18 @@ void main() {
     }
 
     resolveDoors(center, r, contacts) {
+      for (const k of this.kinematic || []) {
+        if (!k.node.alive) continue;
+        const b = k.box;
+        const cx = clamp(center[0], b.min[0], b.max[0]), cy = clamp(center[1], b.min[1], b.max[1]), cz = clamp(center[2], b.min[2], b.max[2]);
+        let dx = center[0] - cx, dy = center[1] - cy, dz = center[2] - cz;
+        const dist = Math.hypot(dx, dy, dz);
+        if (dist >= r || dist < 1e-6) continue;
+        dx /= dist; dy /= dist; dz /= dist;
+        const depth = r - dist;
+        center[0] += dx * depth; center[1] += dy * depth; center[2] += dz * depth;
+        contacts.push({ n: [dx, dy, dz], depth, owner: k.node.index });
+      }
       for (const d of this.doors) {
         if (d.open >= 0.98 || !d.node.alive) continue;
         const b = d.box;
@@ -2047,6 +2406,7 @@ void main() {
       this.hitMarker = Math.max(0, this.hitMarker - dt);
       this.damageFlash = Math.max(0, this.damageFlash - dt * 1.8);
 
+      this.updateAnimatedProps();
       this.updatePlayer(dt);
       this.updateActors(dt);
       this.updateBodies(dt);
@@ -2642,7 +3002,7 @@ void main() {
         }
         case 'SPAWN_OBJECT': this.spawn(target, a.vector_value); break;
         case 'PLAY_ANIMATION': this.emit('animation', target, a.animation); break;
-        case 'START_CUTSCENE': this.emit('cutscene', a.text_value); this.toast(a.text_value || 'Cutscene'); break;
+        case 'START_CUTSCENE': if (!this.startCinematic()) this.toast(a.text_value || 'Cutscene'); break;
         case 'LOAD_SCENE': this.reset(); break;
         case 'GAME_OVER': this.gameOver(a.text_value || 'Game Over'); break;
         case 'CUSTOM_SCRIPT': {
@@ -2730,14 +3090,18 @@ void main() {
     }
 
     // ------------------------------------------------------------------- render
-    renderFrame() {
+    renderFrame(opts = {}) {
       if (!this.camPos && this.cameraNode) this.setCameraFromNode();
-      const cam = this.cameraNode;
-      const camData = cam ? cam.src.camera : { type: 'PERSP', fovY: 1, near: 0.1, far: 500 };
+      const cam = this.activeCamera || this.cameraNode;
+      const cinematic = !!this.activeCamera;
+      const camData = cam ? Object.assign({}, cam.src.camera) : { type: 'PERSP', fovY: 1, near: 0.1, far: 500 };
+      if (cam && cam.animFov) camData.fovY = cam.animFov;
       const world = cam ? cam.world : M4.create();
+      if (cinematic) { this.camPos = cam.worldPos; this.camForward = vNorm(M4.dir(cam.world, [0, 0, -1])); }
       const items = [];
       for (const n of this.nodes) {
         if (!n.effectiveVisible || !n.items.length) continue;
+        if (cinematic && (n.tag === 'Weapon' || n.tag === 'FirstPersonArms')) continue;
         const center = M4.point(n.world, n.mesh.center), radius = n.mesh.radius * M4.maxScale(n.world);
         for (const it of n.items) { it.center = center; it.radius = radius; it.flash = n.flash || (n.parent && n.parent.flash) || 0; items.push(it); }
       }
@@ -2747,12 +3111,19 @@ void main() {
       const camPos = this.camPos || [world[12], world[13], world[14]];
       const fwd = this.camForward || [0, 1, 0];
       const R = this.renderer.shadowRadius;
-      const focus = this.player ? vAdd(this.player.position, vScale([fwd[0], fwd[1], 0], R * 0.45)) : vAdd(camPos, vScale(fwd, R * 0.6));
+      const focus = this.player && !cinematic ? vAdd(this.player.position, vScale([fwd[0], fwd[1], 0], R * 0.45)) : vAdd(camPos, vScale(fwd, R * 0.6));
       const near = Math.max(0.03, Math.min(camData.near || 0.1, this.player && this.player.ctrl && this.player.ctrl.type === 'FIRST_PERSON' ? 0.03 : 0.1));
       const far = Math.max(camData.far || 300, 50);
+      let lens = null;
+      if (camData.dof) {
+        const fo = camData.dof.focusObject && this.byName.get(camData.dof.focusObject);
+        lens = { lens: camData.lens || 50, sensor: camData.sensor || 36, fstop: camData.dof.fstop, dof: camData.dof, focus: fo ? Math.max(0.05, vDot(vSub(fo.worldPos, camPos), fwd)) : camData.dof.focusDistance };
+      }
       const frame = {
+        film: cinematic || this.state === 'rendering' ? this.film : null,
+        accumulating: !!opts.accumulating, resetHistory: !!opts.resetHistory,
         camera: {
-          world, pos: camPos, ortho: camData.type === 'ORTHO',
+          world, pos: camPos, ortho: camData.type === 'ORTHO', lens, near, far,
           proj: (aspect) => (camData.type === 'ORTHO'
             ? M4.ortho(M4.create(), -camData.orthoScale / 2, camData.orthoScale / 2, -camData.orthoScale / 2 / aspect, camData.orthoScale / 2 / aspect, camData.near, camData.far)
             : M4.perspective(M4.create(), camData.fovY, aspect, near, far)),
@@ -2760,7 +3131,7 @@ void main() {
         items, sun, env: this.env, lights: this.collectLights(camPos), shadowFocus: focus,
         tint: this.damageFlash > 0 ? [1 + this.damageFlash * 0.6, 1 - this.damageFlash * 0.3, 1 - this.damageFlash * 0.3] : null,
       };
-      this.renderer.render(frame);
+      this.renderer.render(frame, opts.output || null);
     }
 
     adaptResolution(frameMs) {
@@ -2776,6 +3147,55 @@ void main() {
       if (avg > budget * 1.2) r.setScale(r.scale - 0.08);
       else if (avg < budget * 0.75 && r.scale < maxScale) r.setScale(Math.min(maxScale, r.scale + 0.05));
     }
+  }
+
+  // ===========================================================================
+  // ZIP (store) writer for PNG frame sequences
+  // ===========================================================================
+
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  function crc32(data) {
+    let c = 0xffffffff;
+    for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function makeZip(files) {
+    const parts = [], central = [];
+    let offset = 0;
+    const enc = new TextEncoder();
+    for (const f of files) {
+      const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0, true); local.setUint16(8, 0, true);
+      local.setUint16(10, 0, true); local.setUint16(12, 33, true); local.setUint32(14, crc, true); local.setUint32(18, size, true);
+      local.setUint32(22, size, true); local.setUint16(26, name.length, true); local.setUint16(28, 0, true);
+      parts.push(local.buffer, name, f.data);
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0, true); cd.setUint16(10, 0, true);
+      cd.setUint16(12, 0, true); cd.setUint16(14, 33, true); cd.setUint32(16, crc, true); cd.setUint32(20, size, true); cd.setUint32(24, size, true);
+      cd.setUint16(28, name.length, true); cd.setUint16(30, 0, true); cd.setUint16(32, 0, true); cd.setUint16(34, 0, true); cd.setUint16(36, 0, true);
+      cd.setUint32(38, 0, true); cd.setUint32(42, offset, true);
+      central.push(cd.buffer, name);
+      offset += 30 + name.length + size;
+    }
+    const cdSize = central.reduce((a, b) => a + b.byteLength, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+    end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, end.buffer], { type: 'application/zip' });
+  }
+
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
   }
 
   // ===========================================================================
@@ -2848,13 +3268,46 @@ void main() {
       document.getElementById('menu-controls').textContent = game.isTouch
         ? 'Left stick move · drag right side to look · buttons to jump, fire and use'
         : `WASD move · Space jump · Shift sprint · ${mouseLook ? 'Mouse look · ' : ''}${game.shooter ? 'Click fire · R reload' : 'F attack'} · E use · Esc pause · F3 stats`;
-      ui.showMenu(title, game.shooter ? 'Survive, clear the area and reach the exit.' : 'Explore, collect and reach the goal.', 'Play', false);
+      const filmMode = game.film.playMode === 'FILM' || !game.player;
+      if (filmMode && game.hasCinematic) ui.showMenu(title, `A BlendEngine film · ${((game.timeline.frameEnd - game.timeline.frameStart + 1) / game.timeline.fps).toFixed(1)} s`, 'Play film', false);
+      else ui.showMenu(title, game.shooter ? 'Survive, clear the area and reach the exit.' : 'Explore, collect and reach the goal.', 'Play', false);
+      document.getElementById('film-buttons').classList.toggle('hidden', !game.hasCinematic);
+      const watchFilm = () => { game.sfx.unlock(); ui.hideMenu(); game.startCinematic({ film: true }); };
+      document.getElementById('menu-film').addEventListener('click', watchFilm);
+      document.getElementById('menu-record').addEventListener('click', () => {
+        ui.hideMenu();
+        game.recordFilm((blob) => download(blob, (title.replace(/[^\w-]+/g, '_') || 'film') + '.webm'));
+      });
+      const renderScreen = document.getElementById('render');
+      document.getElementById('render-cancel').addEventListener('click', () => { game.cancelRender = true; });
+      document.getElementById('menu-render').addEventListener('click', async () => {
+        ui.hideMenu();
+        renderScreen.classList.remove('hidden');
+        const bar = renderScreen.querySelector('#render-progress > div'), text = document.getElementById('render-text');
+        const started = performance.now();
+        try {
+          const zip = await game.renderFilm({
+            onProgress: (f, frame) => {
+              bar.style.width = (f * 100).toFixed(1) + '%';
+              const left = (performance.now() - started) / f * (1 - f) / 1000;
+              text.textContent = `Frame ${frame} · ${game.film.samples} samples · ${Math.round(f * 100)}% · ~${Math.ceil(left)} s left`;
+            },
+          });
+          download(zip, (title.replace(/[^\w-]+/g, '_') || 'film') + '_frames.zip');
+        } catch (err) {
+          console.error(err);
+          ui.toast(String(err.message || err));
+        }
+        renderScreen.classList.add('hidden');
+        ui.showMenu(title, 'Film frames saved as a ZIP of PNG images.', 'Play', false);
+      });
       if (game.isTouch) setupTouch(game.input, document.getElementById('touch'));
       if (game.project.show_fps || game.project.debug_mode) ui.perf.classList.remove('hidden');
       if (controller === 'FIRST_PERSON' || game.shooter) ui.crosshair.classList.remove('hidden');
 
       const start = () => {
         game.sfx.unlock();
+        if (filmMode && game.hasCinematic) { if (game.state === 'ended') game.reset(); watchFilm(); return; }
         if (game.state === 'ended') { game.reset(); }
         game.state = 'playing';
         ui.hideMenu();
@@ -2877,7 +3330,9 @@ void main() {
         game.frameNo++;
         const dt = Math.min(realDt, 1 / 20);
         game.input.pollGamepad();
+        if (game.state === 'rendering') { game.input.endFrame(); requestAnimationFrame(frame); return; }
         if (game.state === 'playing') game.update(dt);
+        else if (game.state === 'cinematic') game.updateCinematic(realDt);
         else if (game.state === 'paused' && game.input.pressed('PAUSE')) start();
         if (game.state !== 'playing' && !game.camPos) game.updateCamera(0);
         const t0 = performance.now();

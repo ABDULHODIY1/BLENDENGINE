@@ -73,11 +73,22 @@
   <div id="progress"><div></div></div>
   <p id="loading-text">Loading world…</p>
 </div>
+<div id="render" class="screen hidden">
+  <h1>Rendering film</h1>
+  <div id="render-progress" style="width:min(420px,80vw);height:6px;background:rgba(255,255,255,.12);border-radius:3px;overflow:hidden"><div style="height:100%;width:0;background:var(--accent)"></div></div>
+  <p id="render-text"></p>
+  <button id="render-cancel" class="secondary">Cancel</button>
+</div>
 <div id="menu" class="screen hidden">
   <h1 id="menu-title"></h1>
   <p id="menu-text"></p>
   <button id="menu-play">Play</button>
   <button id="menu-restart" class="secondary hidden">Restart</button>
+  <div id="film-buttons" class="hidden" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+    <button id="menu-film" class="secondary">Watch film</button>
+    <button id="menu-render" class="secondary">Render film (PNG)</button>
+    <button id="menu-record" class="secondary">Record video (WebM)</button>
+  </div>
   <p class="controls" id="menu-controls"></p>
 </div>
 <script src="scene_data.js"></script>
