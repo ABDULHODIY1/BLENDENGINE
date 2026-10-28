@@ -12,6 +12,8 @@
  */
 
 #include <Python.h>
+
+#include "../generic/python_compat.h"
 #include <stddef.h>
 
 #include "BLI_ghash.h"
@@ -191,6 +193,7 @@ static PyObject *bpy_lib_load(BPy_PropertyRNA *self, PyObject *args, PyObject *k
       NULL,
   };
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s" /* `filepath` */
       /* Optional keyword only arguments. */
       "|$"

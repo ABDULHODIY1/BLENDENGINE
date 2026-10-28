@@ -9,6 +9,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "../generic/py_capi_utils.h"
 #include "../generic/python_utildefines.h"
 
@@ -91,6 +93,7 @@ static PyObject *pygpu_vertformat_attr_add(BPyGPUVertFormat *self, PyObject *arg
 
   static const char *_keywords[] = {"id", "comp_type", "len", "fetch_mode", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "$"  /* Keyword only arguments. */
       "s"  /* `id` */
       "O&" /* `comp_type` */

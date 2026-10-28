@@ -13,6 +13,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_string.h"
 #include "BLI_string_utils.h"
 #include "BLI_utildefines.h"
@@ -118,6 +120,7 @@ static PyObject *bpy_blend_paths(PyObject *UNUSED(self), PyObject *args, PyObjec
 
   static const char *_keywords[] = {"absolute", "packed", "local", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "O&" /* `absolute` */
       "O&" /* `packed` */
@@ -181,6 +184,7 @@ static PyObject *bpy_flip_name(PyObject *UNUSED(self), PyObject *args, PyObject 
 
   static const char *_keywords[] = {"", "strip_digits", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s#" /* `name` */
       "|$" /* Optional, keyword only arguments. */
       "O&" /* `strip_digits` */
@@ -225,6 +229,7 @@ static PyObject *bpy_user_resource(PyObject *UNUSED(self), PyObject *args, PyObj
 
   static const char *_keywords[] = {"type", "path", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `type` */
       "|$" /* Optional keyword only arguments. */
       "s"  /* `path` */
@@ -268,6 +273,7 @@ static PyObject *bpy_system_resource(PyObject *UNUSED(self), PyObject *args, PyO
 
   static const char *_keywords[] = {"type", "path", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `type` */
       "|$" /* Optional keyword only arguments. */
       "s"  /* `path` */
@@ -313,6 +319,7 @@ static PyObject *bpy_resource_path(PyObject *UNUSED(self), PyObject *args, PyObj
 
   static const char *_keywords[] = {"type", "major", "minor", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `type` */
       "|$" /* Optional keyword only arguments. */
       "i"  /* `major` */
@@ -353,6 +360,7 @@ static PyObject *bpy_driver_secure_code_test(PyObject *UNUSED(self), PyObject *a
   const bool verbose = false;
   static const char *_keywords[] = {"code", "namespace", "verbose", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O!" /* `expression` */
       "|$" /* Optional keyword only arguments. */
       "O!" /* `namespace` */

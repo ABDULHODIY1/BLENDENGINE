@@ -11,6 +11,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_string.h"
 
 #include "GPU_context.h"
@@ -65,6 +67,7 @@ static PyObject *pygpu_uniformbuffer__tp_new(PyTypeObject *UNUSED(self),
 
   static const char *_keywords[] = {"data", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O" /* `data` */
       ":GPUUniformBuf.__new__",
       _keywords,

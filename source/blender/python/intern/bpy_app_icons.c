@@ -8,6 +8,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "MEM_guardedalloc.h"
 
 #include "BLI_utildefines.h"
@@ -41,6 +43,7 @@ static PyObject *bpy_app_icons_new_triangles(PyObject *UNUSED(self), PyObject *a
 
   static const char *_keywords[] = {"range", "coords", "colors", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "(BB)" /* `range` */
       "S"    /* `coords` */
       "S"    /* `colors` */
@@ -102,6 +105,7 @@ static PyObject *bpy_app_icons_new_triangles_from_file(PyObject *UNUSED(self),
 
   static const char *_keywords[] = {"filename", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s" /* `filename` */
       ":new_triangles_from_file",
       _keywords,
@@ -129,6 +133,7 @@ static PyObject *bpy_app_icons_release(PyObject *UNUSED(self), PyObject *args, P
   int icon_id;
   static const char *_keywords[] = {"icon_id", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "i" /* `icon_id` */
       ":release",
       _keywords,

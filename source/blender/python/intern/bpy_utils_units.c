@@ -11,6 +11,8 @@
 #define PY_SSIZE_T_CLEAN
 
 #include <Python.h>
+
+#include "../generic/python_compat.h"
 #include <structmember.h>
 
 #include "BLI_string.h"
@@ -176,6 +178,7 @@ static PyObject *bpyunits_to_value(PyObject *UNUSED(self), PyObject *args, PyObj
       NULL,
   };
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s"  /* `unit_system` */
       "s"  /* `unit_category` */
       "s#" /* `str_input` */
@@ -263,6 +266,7 @@ static PyObject *bpyunits_to_string(PyObject *UNUSED(self), PyObject *args, PyOb
       NULL,
   };
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s"  /* `unit_system` */
       "s"  /* `unit_category` */
       "d"  /* `value` */

@@ -9,6 +9,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "GPU_vertex_buffer.h"
 
 #include "BLI_math.h"
@@ -237,6 +239,7 @@ static PyObject *pygpu_vertbuf__tp_new(PyTypeObject *UNUSED(type), PyObject *arg
 
   static const char *_keywords[] = {"format", "len", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O!" /* `format` */
       "I"  /* `len` */
       ":GPUVertBuf.__new__",
@@ -273,6 +276,7 @@ static PyObject *pygpu_vertbuf_attr_fill(BPyGPUVertBuf *self, PyObject *args, Py
 
   static const char *_keywords[] = {"id", "data", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O" /* `id` */
       "O" /* `data` */
       ":attr_fill",

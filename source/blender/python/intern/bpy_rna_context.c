@@ -8,6 +8,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_listbase.h"
 #include "BLI_utildefines.h"
 
@@ -239,6 +241,7 @@ static PyObject *bpy_context_temp_override(PyObject *self, PyObject *args, PyObj
 
   static const char *const _keywords[] = {"window", "area", "region", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional, keyword only arguments. */
       "O&" /* `window` */
       "O&" /* `area` */

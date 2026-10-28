@@ -9,6 +9,8 @@
 #include "PIL_time.h"
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BPY_extern.h"
 #include "bpy_app_timers.h"
 
@@ -94,6 +96,7 @@ static PyObject *bpy_app_timers_register(PyObject *UNUSED(self), PyObject *args,
 
   static const char *_keywords[] = {"function", "first_interval", "persistent", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O"  /* `function` */
       "|$" /* Optional keyword only arguments. */
       "d"  /* `first_interval` */

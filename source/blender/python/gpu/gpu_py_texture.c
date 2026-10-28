@@ -11,6 +11,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_string.h"
 
 #include "DNA_image_types.h"
@@ -121,6 +123,7 @@ static PyObject *pygpu_texture__tp_new(PyTypeObject *UNUSED(self), PyObject *arg
 
   static const char *_keywords[] = {"size", "layers", "is_cubemap", "format", "data", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O"  /* `size` */
       "|$" /* Optional keyword only arguments. */
       "i"  /* `layers` */
@@ -294,6 +297,7 @@ static PyObject *pygpu_texture_clear(BPyGPUTexture *self, PyObject *args, PyObje
 
   static const char *_keywords[] = {"format", "value", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "$"  /* Keyword only arguments. */
       "O&" /* `format` */
       "O"  /* `value` */

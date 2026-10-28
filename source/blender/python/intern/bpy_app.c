@@ -10,6 +10,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "bpy_app.h"
 
 #include "bpy_app_alembic.h"
@@ -502,6 +504,7 @@ static PyObject *bpy_app_is_job_running(PyObject *UNUSED(self), PyObject *args, 
   };
   static const char *_keywords[] = {"job_type", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `job_type` */
       ":is_job_running",
       _keywords,

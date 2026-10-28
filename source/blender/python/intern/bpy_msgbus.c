@@ -7,6 +7,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "../generic/py_capi_rna.h"
 #include "../generic/py_capi_utils.h"
 #include "../generic/python_utildefines.h"
@@ -241,6 +243,7 @@ static PyObject *bpy_msgbus_subscribe_rna(PyObject *UNUSED(self), PyObject *args
       NULL,
   };
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O"  /* `key` */
       "O"  /* `owner` */
       "O!" /* `args` */
@@ -342,6 +345,7 @@ static PyObject *bpy_msgbus_publish_rna(PyObject *UNUSED(self), PyObject *args, 
       NULL,
   };
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O" /* `key` */
       ":publish_rna",
       _keywords,

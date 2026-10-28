@@ -7,6 +7,8 @@
  */
 
 #include <Python.h>
+
+#include "../generic/python_compat.h"
 #include <stddef.h>
 
 #include "MEM_guardedalloc.h"
@@ -159,6 +161,7 @@ static PyObject *bpy_user_map(PyObject *UNUSED(self), PyObject *args, PyObject *
 
   static const char *_keywords[] = {"subset", "key_types", "value_types", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "O"  /* `subset` */
       "O!" /* `key_types` */
@@ -302,6 +305,7 @@ static PyObject *bpy_batch_remove(PyObject *UNUSED(self), PyObject *args, PyObje
 
   static const char *_keywords[] = {"ids", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O" /* `ids` */
       ":batch_remove",
       _keywords,
@@ -380,6 +384,7 @@ static PyObject *bpy_orphans_purge(PyObject *UNUSED(self), PyObject *args, PyObj
 
   static const char *_keywords[] = {"do_local_ids", "do_linked_ids", "do_recursive", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|"  /* Optional arguments. */
       "O&" /* `do_local_ids` */
       "O&" /* `do_linked_ids` */

@@ -62,7 +62,7 @@ class BE_UL_behaviors(UIList):
 
 class BE_UL_events(UIList):
     def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_propname, _index):
-        layout.prop(item, "name", text="", emboss=False, icon="EVENT")
+        layout.prop(item, "name", text="", emboss=False, icon="PLAY")
 
 
 class BE_UL_conditions(UIList):
@@ -1075,7 +1075,7 @@ class VIEW3D_PT_blendengine_inspector(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_assets(BE_View3DPanel, Panel):
     bl_label = "Asset Browser"
-    bl_category = "Assets"
+    bl_category = "Create"
 
     def draw(self, _context):
         _draw_assets(self.layout)
@@ -1083,7 +1083,7 @@ class VIEW3D_PT_blendengine_assets(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_materials(BE_View3DPanel, Panel):
     bl_label = "Material Editor"
-    bl_category = "Assets"
+    bl_category = "Create"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1100,7 +1100,7 @@ class VIEW3D_PT_blendengine_quick_start(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_object(BE_View3DPanel, Panel):
     bl_label = "Game Object Inspector"
-    bl_category = "Object"
+    bl_category = "Inspector"
 
     def draw(self, context):
         layout = self.layout
@@ -1113,7 +1113,7 @@ class VIEW3D_PT_blendengine_object(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_player(BE_View3DPanel, Panel):
     bl_label = "Player Controller"
-    bl_category = "Object"
+    bl_category = "Inspector"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1151,7 +1151,7 @@ class VIEW3D_PT_blendengine_visual_code(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_animation(BE_View3DPanel, Panel):
     bl_label = "Animation Editor"
-    bl_category = "Animation"
+    bl_category = "Logic"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1165,7 +1165,7 @@ class VIEW3D_PT_blendengine_animation(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_character(BE_View3DPanel, Panel):
     bl_label = "Character Creator"
-    bl_category = "Character"
+    bl_category = "Gameplay"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1174,7 +1174,7 @@ class VIEW3D_PT_blendengine_character(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_ai(BE_View3DPanel, Panel):
     bl_label = "AI Editor"
-    bl_category = "AI"
+    bl_category = "Gameplay"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1197,7 +1197,7 @@ class VIEW3D_PT_blendengine_terrain(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_physics(BE_View3DPanel, Panel):
     bl_label = "Physics Editor"
-    bl_category = "Physics"
+    bl_category = "Gameplay"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1214,7 +1214,7 @@ class VIEW3D_PT_blendengine_physics(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_health(BE_View3DPanel, Panel):
     bl_label = "Health"
-    bl_category = "Object"
+    bl_category = "Inspector"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1236,7 +1236,7 @@ class VIEW3D_PT_blendengine_input(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_multiplayer(BE_View3DPanel, Panel):
     bl_label = "Multiplayer"
-    bl_category = "Multiplayer"
+    bl_category = "Ship"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1245,7 +1245,7 @@ class VIEW3D_PT_blendengine_multiplayer(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_optimization(BE_View3DPanel, Panel):
     bl_label = "Streaming + Culling"
-    bl_category = "Optimize"
+    bl_category = "Ship"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1254,7 +1254,7 @@ class VIEW3D_PT_blendengine_optimization(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_budget(BE_View3DPanel, Panel):
     bl_label = "Frame Budget"
-    bl_category = "Optimize"
+    bl_category = "Ship"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1263,7 +1263,7 @@ class VIEW3D_PT_blendengine_budget(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_analyzer(BE_View3DPanel, Panel):
     bl_label = "Scene Analyzer"
-    bl_category = "Optimize"
+    bl_category = "Ship"
 
     def draw(self, context):
         _draw_scene_analyzer(self.layout, context.scene)
@@ -1271,7 +1271,7 @@ class VIEW3D_PT_blendengine_analyzer(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_profiler(BE_View3DPanel, Panel):
     bl_label = "Profiler"
-    bl_category = "Profiler"
+    bl_category = "Play"
 
     def draw(self, context):
         _draw_profiler(self.layout, context.scene)
@@ -1279,7 +1279,7 @@ class VIEW3D_PT_blendengine_profiler(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_console(BE_View3DPanel, Panel):
     bl_label = "Console / Logs"
-    bl_category = "Console"
+    bl_category = "Play"
 
     def draw(self, context):
         _draw_console(self.layout, context.scene)
@@ -1287,7 +1287,7 @@ class VIEW3D_PT_blendengine_console(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_audio_vfx_lighting(BE_View3DPanel, Panel):
     bl_label = "Audio / VFX / Lighting"
-    bl_category = "Assets"
+    bl_category = "Create"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1305,7 +1305,7 @@ class VIEW3D_PT_blendengine_plugins(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_test_run(BE_View3DPanel, Panel):
     bl_label = "Run Game"
-    bl_category = "Play Mode"
+    bl_category = "Play"
 
     def draw(self, context):
         _draw_test_run(self.layout, context.scene)
@@ -1313,7 +1313,7 @@ class VIEW3D_PT_blendengine_test_run(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_play_mode_console(BE_View3DPanel, Panel):
     bl_label = "Play Mode Console"
-    bl_category = "Play Mode"
+    bl_category = "Play"
 
     def draw(self, context):
         _draw_console(self.layout, context.scene)

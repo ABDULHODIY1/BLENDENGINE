@@ -8,6 +8,8 @@
 
 #include <Python.h>
 
+#include "python_compat.h"
+
 #include "BLI_rect.h"
 #include "BLI_string.h"
 #include "BLI_utildefines.h"
@@ -93,6 +95,7 @@ static PyObject *py_imbuf_resize(Py_ImBuf *self, PyObject *args, PyObject *kw)
 
   static const char *_keywords[] = {"size", "method", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "(ii)" /* `size` */
       "|$"   /* Optional keyword only arguments. */
       "O&"   /* `method` */
@@ -139,6 +142,7 @@ static PyObject *py_imbuf_crop(Py_ImBuf *self, PyObject *args, PyObject *kw)
 
   static const char *_keywords[] = {"min", "max", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "(II)" /* `min` */
       "(II)" /* `max` */
       ":crop",
@@ -431,6 +435,7 @@ static PyObject *M_imbuf_new(PyObject *UNUSED(self), PyObject *args, PyObject *k
   int size[2];
   static const char *_keywords[] = {"size", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "(ii)" /* `size` */
       ":new",
       _keywords,
@@ -471,6 +476,7 @@ static PyObject *M_imbuf_load(PyObject *UNUSED(self), PyObject *args, PyObject *
 
   static const char *_keywords[] = {"filepath", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s" /* `filepath` */
       ":load",
       _keywords,
@@ -518,6 +524,7 @@ static PyObject *M_imbuf_write(PyObject *UNUSED(self), PyObject *args, PyObject 
 
   static const char *_keywords[] = {"image", "filepath", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O!" /* `image` */
       "|$" /* Optional keyword only arguments. */
       "s"  /* `filepath` */

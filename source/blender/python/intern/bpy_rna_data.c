@@ -12,6 +12,8 @@
  */
 
 #include <Python.h>
+
+#include "../generic/python_compat.h"
 #include <stddef.h>
 
 #include "BLI_string.h"
@@ -130,6 +132,7 @@ static PyObject *bpy_rna_data_temp_data(PyObject *UNUSED(self), PyObject *args, 
   const char *filepath = NULL;
   static const char *_keywords[] = {"filepath", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "z"  /* `filepath` */
       ":temp_data",

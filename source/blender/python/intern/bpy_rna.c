@@ -12,6 +12,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include <float.h> /* FLT_MIN/MAX */
 #include <stddef.h>
 
@@ -3622,6 +3624,7 @@ static PyObject *pyrna_struct_is_property_set(BPy_StructRNA *self, PyObject *arg
 
   static const char *_keywords[] = {"", "ghost", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "s"  /* `name` (positional). */
       "|$" /* Optional keyword only arguments. */
       "O&" /* `ghost` */

@@ -14,6 +14,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_utildefines.h"
 
 #include "WM_api.h"
@@ -52,6 +54,7 @@ static bool bpy_gizmotype_target_property_def(wmGizmoType *gzt, PyObject *item)
 
   static const char *const _keywords[] = {"id", "type", "array_length", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "s"  /* `id` */
       "O&" /* `type` */

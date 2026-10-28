@@ -82,8 +82,8 @@ class BinaryWriter:
 def _corner_normals(mesh, loop_count):
     normals = np.empty(loop_count * 3, dtype=np.float32)
     corner_normals = getattr(mesh, "corner_normals", None)
-    if corner_normals is not None:
-        # Blender 4.1+.
+    if corner_normals is not None and len(corner_normals) == loop_count:
+        # Blender 4.1+ (BlendEngine 3.6 exposes the attribute but leaves it empty).
         corner_normals.foreach_get("vector", normals)
         return normals
     # Blender 3.x / 4.0.

@@ -13,6 +13,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "BLI_utildefines.h"
 
 #include "GPU_batch.h"
@@ -55,6 +57,7 @@ static PyObject *pygpu_batch__tp_new(PyTypeObject *UNUSED(type), PyObject *args,
 
   static const char *_keywords[] = {"type", "buf", "elem", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "O&" /* `type` */
       "O!" /* `buf` */
@@ -256,6 +259,7 @@ static PyObject *pygpu_batch_draw_instanced(BPyGPUBatch *self, PyObject *args, P
 
   static const char *_keywords[] = {"program", "instance_start", "instance_count", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O!" /* `program` */
       "|$" /* Optional keyword only arguments. */
       "i"  /* `instance_start` */
@@ -298,6 +302,7 @@ static PyObject *pygpu_batch_draw_range(BPyGPUBatch *self, PyObject *args, PyObj
 
   static const char *_keywords[] = {"program", "elem_start", "elem_count", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O!" /* `program` */
       "|$" /* Optional keyword only arguments. */
       "i"  /* `elem_start' */

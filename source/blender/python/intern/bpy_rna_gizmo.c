@@ -7,6 +7,8 @@
  */
 
 #include <Python.h>
+
+#include "../generic/python_compat.h"
 #include <stddef.h>
 
 #include "MEM_guardedalloc.h"
@@ -340,6 +342,7 @@ static PyObject *bpy_gizmo_target_set_handler(PyObject *UNUSED(self), PyObject *
    * (see: rna_wm_gizmo_api.c). conventions should match. */
   static const char *const _keywords[] = {"self", "target", "get", "set", "range", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `self` */
       "O&" /* `target` */
       "|$" /* Optional keyword only arguments. */
@@ -438,6 +441,7 @@ static PyObject *bpy_gizmo_target_get_value(PyObject *UNUSED(self), PyObject *ar
 
   static const char *const _keywords[] = {"self", "target", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `self` */
       "O&" /* `target` */
       ":target_get_value",
@@ -503,6 +507,7 @@ static PyObject *bpy_gizmo_target_set_value(PyObject *UNUSED(self), PyObject *ar
 
   static const char *const _keywords[] = {"self", "target", "value", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `self` */
       "O&" /* `target` */
       "O"  /* `value` */
@@ -581,6 +586,7 @@ static PyObject *bpy_gizmo_target_get_range(PyObject *UNUSED(self), PyObject *ar
 
   static const char *const _keywords[] = {"self", "target", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "O&" /* `self` */
       "O&" /* `target` */
       ":target_get_range",

@@ -12,6 +12,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "GPU_context.h"
 #include "GPU_framebuffer.h"
 #include "GPU_init_exit.h"
@@ -276,6 +278,7 @@ static PyObject *pygpu_framebuffer__tp_new(PyTypeObject *UNUSED(self),
   PyObject *color_attachements = NULL;
   static const char *_keywords[] = {"depth_slot", "color_slots", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "O"  /* `depth_slot` */
       "O"  /* `color_slots` */
@@ -371,6 +374,7 @@ static PyObject *pygpu_framebuffer_clear(BPyGPUFrameBuffer *self, PyObject *args
 
   static const char *_keywords[] = {"color", "depth", "stencil", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "|$" /* Optional keyword only arguments. */
       "O"  /* `color` */
       "O"  /* `depth` */
@@ -490,6 +494,7 @@ static PyObject *pygpu_framebuffer_read_color(BPyGPUFrameBuffer *self,
   static const char *_keywords[] = {
       "x", "y", "xsize", "ysize", "channels", "slot", "format", "data", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "i"  /* `x` */
       "i"  /* `y` */
       "i"  /* `xsize` */
@@ -589,6 +594,7 @@ static PyObject *pygpu_framebuffer_read_depth(BPyGPUFrameBuffer *self,
 
   static const char *_keywords[] = {"x", "y", "xsize", "ysize", "data", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "i"  /* `x` */
       "i"  /* `y` */
       "i"  /* `xsize` */

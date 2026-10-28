@@ -308,7 +308,57 @@ static void pydriver_error(ChannelDriver *driver, const struct PathResolvedRNA *
 #  define OK_OP(op) [op] = true
 
 static const bool secure_opcodes[255] = {
-#  if PY_VERSION_HEX >= 0x030b0000 /* Python 3.11 & newer. */
+#  if PY_VERSION_HEX >= 0x030c0000 /* Python 3.12 & newer. */
+
+    OK_OP(CACHE),
+    OK_OP(POP_TOP),
+    OK_OP(PUSH_NULL),
+    OK_OP(END_FOR),
+    OK_OP(NOP),
+    OK_OP(UNARY_NEGATIVE),
+    OK_OP(UNARY_NOT),
+    OK_OP(UNARY_INVERT),
+    OK_OP(BINARY_SUBSCR),
+    OK_OP(BINARY_SLICE),
+    OK_OP(GET_LEN),
+    OK_OP(RETURN_VALUE),
+    OK_OP(RETURN_CONST),
+    OK_OP(SWAP),
+    OK_OP(COPY),
+    OK_OP(BUILD_TUPLE),
+    OK_OP(BUILD_LIST),
+    OK_OP(BUILD_SET),
+    OK_OP(BUILD_MAP),
+    OK_OP(COMPARE_OP),
+    OK_OP(JUMP_FORWARD),
+    OK_OP(JUMP_BACKWARD),
+    OK_OP(POP_JUMP_IF_FALSE),
+    OK_OP(POP_JUMP_IF_TRUE),
+    OK_OP(POP_JUMP_IF_NOT_NONE),
+    OK_OP(POP_JUMP_IF_NONE),
+    OK_OP(LOAD_GLOBAL),
+    OK_OP(IS_OP),
+    OK_OP(CONTAINS_OP),
+    OK_OP(BINARY_OP),
+    OK_OP(LOAD_FAST),
+    OK_OP(LOAD_FAST_CHECK),
+    OK_OP(LOAD_FAST_AND_CLEAR),
+    OK_OP(STORE_FAST),
+    OK_OP(DELETE_FAST),
+    OK_OP(BUILD_SLICE),
+    OK_OP(LOAD_DEREF),
+    OK_OP(STORE_DEREF),
+    OK_OP(RESUME),
+    OK_OP(LIST_EXTEND),
+    OK_OP(SET_UPDATE),
+
+    /* Special cases. */
+    OK_OP(LOAD_CONST), /* Ok because constants are accepted. */
+    OK_OP(LOAD_NAME),  /* Ok, because `PyCodeObject.names` is checked. */
+    OK_OP(CALL),       /* Ok, because we check its "name" before calling. */
+    OK_OP(KW_NAMES),   /* Ok, because it's used for calling functions with keyword arguments. */
+
+#  elif PY_VERSION_HEX >= 0x030b0000 /* Python 3.11. */
 
     OK_OP(CACHE),
     OK_OP(POP_TOP),

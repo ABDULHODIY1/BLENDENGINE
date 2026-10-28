@@ -576,8 +576,8 @@ void main() {
     // Camera motion blur by reprojecting this pixel into the previous frame.
     vec4 w = uInvViewProj * vec4(vUV * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
     vec4 prev = uPrevViewProj * vec4(w.xyz / w.w, 1.0);
-    vec2 vel = (vUV - (prev.xy / prev.w * 0.5 + 0.5)) * uMotionBlur;
-    vel = clamp(vel, vec2(-0.04), vec2(0.04));
+    vec2 vel = (vUV - (prev.xy / prev.w * 0.5 + 0.5)) * uMotionBlur * 0.5;
+    vel = clamp(vel, vec2(-0.015), vec2(0.015));
     vec3 acc = c;
     for (int i = 1; i < 8; i++) acc += sceneColor(vUV - vel * (float(i) / 7.0 - 0.5));
     c = acc / 8.0;
@@ -2861,7 +2861,7 @@ void main() {
         this.objectives.collected += 1;
         this.ensureVar(p, 'Score', 'INT', 0).value += 10;
         this.sfx.play('pickup');
-        this.toast(`Coin ${this.objectives.collected}/${this.objectives.coins}  +10`);
+        this.toast(`Collected ${this.objectives.collected}/${this.objectives.coins}  +10`);
       } else if (tag === 'Health' || tag === 'Med' || tag === 'Medkit') {
         if (p.health.cur >= p.health.max) return;
         t.alive = false;

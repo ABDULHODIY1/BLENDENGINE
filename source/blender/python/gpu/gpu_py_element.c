@@ -9,6 +9,8 @@
 
 #include <Python.h>
 
+#include "../generic/python_compat.h"
+
 #include "GPU_index_buffer.h"
 
 #include "BLI_math.h"
@@ -38,6 +40,7 @@ static PyObject *pygpu_IndexBuf__tp_new(PyTypeObject *UNUSED(type), PyObject *ar
 
   static const char *_keywords[] = {"type", "seq", NULL};
   static _PyArg_Parser _parser = {
+      PY_ARG_PARSER_HEAD_COMPAT()
       "$O" /* `type` */
       "&O" /* `seq` */
       ":IndexBuf.__new__",
