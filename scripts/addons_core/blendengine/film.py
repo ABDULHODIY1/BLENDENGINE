@@ -236,36 +236,50 @@ class BE_OT_render_film(Operator):
 
 def draw_film(layout, scene):
     film = scene.blendengine_film
-    layout.use_property_split = True
-    layout.use_property_decorate = False
+    shots = sum(1 for m in scene.timeline_markers if m.camera)
+    seconds = (scene.frame_end - scene.frame_start + 1) / max(1.0, scene.render.fps / max(scene.render.fps_base, 1e-6))
+
+    grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
+    for value, caption, icon in (("%.1f s" % seconds, "Length", "TIME"), ("%d" % shots, "Shots", "MARKER_HLT")):
+        card = grid.box().column(align=True)
+        row = card.row()
+        row.scale_y = 1.25
+        row.label(text=value, icon=icon)
+        card.label(text=caption)
+
     col = layout.column(align=True)
-    col.operator("blendengine.add_cinematic_camera", icon="OUTLINER_OB_CAMERA")
-    col.operator("blendengine.add_camera_shot", icon="MARKER_HLT")
-    col.operator("blendengine.create_demo_sequence", icon="SEQUENCE")
-    layout.label(text="Timeline: frames %d-%d at %d fps, %d shots" % (
-        scene.frame_start, scene.frame_end, scene.render.fps, sum(1 for m in scene.timeline_markers if m.camera)))
-    layout.prop(film, "play_mode")
-    layout.prop(film, "export_animation")
-    layout.prop(film, "animated_props_loop")
+    col.operator("blendengine.add_cinematic_camera", text="New Camera", icon="OUTLINER_OB_CAMERA")
+    col.operator("blendengine.add_camera_shot", text="Cut Here", icon="MARKER_HLT")
+    col.operator("blendengine.create_demo_sequence", text="Demo Sequence", icon="SEQUENCE")
+
+    row = layout.row(align=True)
+    row.prop(film, "play_mode", expand=True)
+    row = layout.row(align=True)
+    row.prop(film, "export_animation", text="Timeline", toggle=True, icon="ANIM")
+    row.prop(film, "animated_props_loop", text="Loop Props", toggle=True, icon="FILE_REFRESH")
+
     box = layout.box()
     box.label(text="Film Look", icon="CAMERA_DATA")
-    box.prop(film, "letterbox")
-    box.prop(film, "depth_of_field")
-    box.prop(film, "motion_blur")
-    box.prop(film, "film_grain")
-    box.prop(film, "chromatic_aberration")
-    box.prop(film, "vignette")
-    box.prop(film, "contrast")
-    box.prop(film, "saturation")
-    box.prop(film, "temperature")
-    box.prop(film, "render_samples")
+    row = box.row(align=True)
+    row.prop(film, "letterbox", expand=True)
+    box.prop(film, "depth_of_field", text="Depth of Field", toggle=True, icon="CAMERA_DATA")
+    col = box.column(align=True)
+    for prop, text in (("motion_blur", "Motion Blur"), ("film_grain", "Grain"), ("chromatic_aberration", "Chromatic"),
+                       ("vignette", "Vignette"), ("contrast", "Contrast"), ("saturation", "Saturation"),
+                       ("temperature", "Warmth")):
+        col.prop(film, prop, text=text, slider=True)
+    box.prop(film, "render_samples", text="Player Samples")
+
     box = layout.box()
-    box.label(text="Blender Film Render", icon="RENDER_ANIMATION")
-    box.prop(film, "film_engine")
-    box.prop(film, "film_samples")
-    box.prop(film, "film_resolution")
-    box.prop(film, "film_quality")
-    box.operator("blendengine.render_film", icon="RENDER_ANIMATION")
+    box.label(text="Render Video", icon="RENDER_ANIMATION")
+    row = box.row(align=True)
+    row.prop(film, "film_engine", expand=True)
+    box.prop(film, "film_resolution", text="")
+    box.prop(film, "film_samples", text="Samples")
+    box.prop(film, "film_quality", text="")
+    row = box.row()
+    row.scale_y = 1.6
+    row.operator("blendengine.render_film", text="Render Film", icon="RENDER_ANIMATION", depress=True)
 
 
 class VIEW3D_PT_blendengine_film(Panel):

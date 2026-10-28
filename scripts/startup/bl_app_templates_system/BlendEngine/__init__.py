@@ -52,7 +52,7 @@ def _style_widget(widget, inner=(0.015, 0.017, 0.02, 1.0), selected=(0.0, 0.78, 
     _safe_color(widget, "outline", (0.0, 0.0, 0.0, 1.0))
     _safe_color(widget, "item", (0.05, 0.92, 0.78, 1.0))
     try:
-        widget.roundness = 0.18
+        widget.roundness = 0.35
     except Exception:
         pass
 

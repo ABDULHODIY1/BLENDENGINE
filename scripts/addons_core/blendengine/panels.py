@@ -123,6 +123,67 @@ class BE_ObjectPanel:
         return context.object is not None
 
 
+# -----------------------------------------------------------------------------
+# UI kit: consistent, compact building blocks that stay readable in a narrow
+# sidebar (short labels, two-column grids, one highlighted primary action).
+
+
+def _primary(layout, operator, text, icon, scale=1.6, **props):
+    """Large highlighted button for the main action of a panel."""
+    row = layout.row(align=True)
+    row.scale_y = scale
+    op = row.operator(operator, text=text, icon=icon, depress=True)
+    for key, value in props.items():
+        setattr(op, key, value)
+    return op
+
+
+def _grid(layout, columns=2):
+    return layout.grid_flow(row_major=True, columns=columns, even_columns=True, even_rows=True, align=True)
+
+
+def _section(layout, title, icon="NONE"):
+    box = layout.box()
+    box.label(text=title, icon=icon)
+    return box
+
+
+def _short_number(value):
+    value = float(value)
+    if value >= 1000000:
+        return "%.1fM" % (value / 1000000.0)
+    if value >= 10000:
+        return "%dk" % round(value / 1000.0)
+    if value >= 1000:
+        return "%.1fk" % (value / 1000.0)
+    return "%d" % value
+
+
+def _stat_cards(layout, items):
+    """Two-column cards with a large value and a small caption."""
+    grid = _grid(layout, 2)
+    for value, caption, icon in items:
+        card = grid.box().column(align=True)
+        row = card.row()
+        row.scale_y = 1.25
+        row.label(text=value, icon=icon)
+        card.label(text=caption)
+
+
+def _check(layout, ok, text, value="", warn=False):
+    row = layout.row(align=True)
+    split = row.split(factor=0.68, align=True)
+    split.label(text=text, icon="CHECKMARK" if ok else ("ERROR" if not warn else "INFO"))
+    split.label(text=value)
+
+
+def _toggles(layout, items, columns=2):
+    grid = _grid(layout, columns)
+    for data, prop, text, icon in items:
+        grid.prop(data, prop, text=text, icon=icon, toggle=True)
+
+
+
 def _draw_project_settings(layout, scene):
     project = scene.blendengine_project
     layout.use_property_split = True
@@ -209,112 +270,93 @@ def _draw_engine_dashboard(layout, context):
     heavy_textures = _heavy_texture_count(2048 if opt.one_gb_ram_mode else 4096)
     game_objects, behaviors, components = _scene_counts(scene)
 
-    header = layout.row(align=True)
-    header.scale_y = 1.4
-    header.label(text="BlendEngine Studio", icon="PLAY")
-
-    layout.prop(project, "game_title", text="")
-
-    grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
-    grid.label(text="FPS %d" % budget.target_fps, icon="TIME")
-    grid.label(text="RAM %d MB" % opt.max_runtime_ram_mb, icon="INFO")
-    grid.label(text="%d Objects" % game_objects, icon="OUTLINER_OB_MESH")
-    grid.label(text="%d Rules" % behaviors, icon="NODETREE")
-
-    row = layout.row(align=True)
-    row.scale_y = 1.45
-    row.operator_context = "INVOKE_DEFAULT"
-    row.operator("blendengine.easy_create_game", text="New Game", icon="ADD")
-    row.operator_context = "EXEC_DEFAULT"
+    layout.prop(project, "game_title", text="", icon="FILE_3D")
     if project.test_running:
-        row.operator("blendengine.stop_test_run", text="Stop Game", icon="PAUSE")
+        _primary(layout, "blendengine.stop_test_run", "Stop", "PAUSE")
     else:
-        row.operator("blendengine.test_run_scene", text="Run Game", icon="PLAY")
+        _primary(layout, "blendengine.test_run_scene", "Play", "PLAY")
+    grid = _grid(layout, 2)
+    grid.operator("blendengine.prepare_build", text="Build", icon="EXPORT")
+    grid.operator("blendengine.optimize_for_one_gb", text="Optimize", icon="MOD_SIMPLIFY")
+    grid.operator_context = "INVOKE_DEFAULT"
+    grid.operator("blendengine.easy_create_game", text="New Game", icon="ADD")
+    grid.operator_context = "EXEC_DEFAULT"
+    grid.operator("blendengine.render_film", text="Film", icon="RENDER_ANIMATION")
 
-    row = layout.row(align=True)
-    row.operator("blendengine.optimize_for_one_gb", text="1GB Optimize", icon="MOD_SIMPLIFY")
-    row.operator("blendengine.prepare_build", text="Build", icon="EXPORT")
+    _stat_cards(layout, (
+        (_short_number(game_objects), "Objects", "OUTLINER_OB_MESH"),
+        (_short_number(behaviors), "Rules", "NODETREE"),
+        (_short_number(metrics["triangle_count"]), "Triangles", "MESH_DATA"),
+        (_short_number(metrics["draw_calls_estimated"]), "Draw calls", "RENDERLAYERS"),
+    ))
 
-    layout.separator()
-    status = layout.column(align=True)
-    _draw_status_row(status, budget.target_fps >= 60, "FPS target", "%d" % budget.target_fps)
-    _draw_status_row(status, opt.max_runtime_ram_mb <= 1024 if opt.one_gb_ram_mode else True, "Memory budget", "%d MB" % opt.max_runtime_ram_mb)
-    _draw_status_row(status, heavy_textures == 0, "Heavy textures", "%d" % heavy_textures)
-    _draw_status_row(status, missing_scripts == 0, "Missing scripts", "%d" % missing_scripts)
-    _draw_status_row(status, report.status != "CRITICAL", "Build readiness", report.status.title())
-    status.label(text="%d tris / %d draw calls / %.1f MB textures" % (
-        metrics["triangle_count"],
-        metrics["draw_calls_estimated"],
-        metrics["texture_memory_mb"],
-    ), icon="INFO")
-    status.label(text=project.test_status, icon="PLAY" if project.test_running else "PAUSE")
+    box = _section(layout, "Project Health", "FUND")
+    col = box.column(align=True)
+    _check(col, budget.target_fps >= 60, "FPS target", "%d" % budget.target_fps)
+    _check(col, opt.max_runtime_ram_mb <= 1024 if opt.one_gb_ram_mode else True, "Memory", "%d MB" % opt.max_runtime_ram_mb)
+    _check(col, heavy_textures == 0, "Big textures", "%d" % heavy_textures)
+    _check(col, missing_scripts == 0, "Missing scripts", "%d" % missing_scripts)
+    _check(col, report.status != "CRITICAL", "Build ready", report.status.title())
+    row = layout.row()
+    row.label(text="Running" if project.test_running else "Stopped", icon="PLAY" if project.test_running else "PAUSE")
     if context.window and context.window.workspace and context.window.workspace.name == "BlendEngine":
-        status.label(text="Game input lock: %s" % ("On" if scene.blendengine_editor.input_lock_enabled else "Off"), icon="KEYINGSET")
+        row.label(text="Keys: %s" % ("Game" if scene.blendengine_editor.input_lock_enabled else "Editor"), icon="KEYINGSET")
 
 
 def _draw_smart_viewport(layout, scene):
     editor = scene.blendengine_editor
     project = scene.blendengine_project
+    _toggles(layout, (
+        (editor, "object_snap", "Snap", "SNAP_ON"),
+        (editor, "grid_snap", "Grid", "MESH_GRID"),
+        (project, "show_colliders", "Colliders", "MESH_CUBE"),
+        (project, "show_navigation", "AI Nav", "TRACKING"),
+        (editor, "physics_preview", "Physics", "MOD_PHYSICS"),
+        (editor, "lighting_preview", "Lighting", "LIGHT"),
+        (editor, "performance_heatmap", "Heatmap", "SEQ_HISTOGRAM"),
+        (editor, "camera_preview", "Camera", "CAMERA_DATA"),
+    ))
+    layout.prop(editor, "multiplayer_preview", text="Network Preview", icon="URL", toggle=True)
     row = layout.row(align=True)
-    row.prop(editor, "object_snap", toggle=True, icon="SNAP_ON")
-    row.prop(editor, "grid_snap", toggle=True, icon="MESH_GRID")
-    row = layout.row(align=True)
-    row.prop(project, "show_colliders", text="Collision", toggle=True, icon="MESH_CUBE")
-    row.prop(project, "show_navigation", text="AI Nav", toggle=True, icon="TRACKING")
-    row = layout.row(align=True)
-    row.prop(editor, "physics_preview", toggle=True, icon="MOD_PHYSICS")
-    row.prop(editor, "lighting_preview", toggle=True, icon="LIGHT")
-    row = layout.row(align=True)
-    row.prop(editor, "performance_heatmap", toggle=True, icon="SEQ_HISTOGRAM")
-    row.prop(editor, "camera_preview", toggle=True, icon="CAMERA_DATA")
-    row.prop(editor, "multiplayer_preview", toggle=True, icon="URL")
-    layout.label(text="Heatmap: Green good, Yellow watch, Red heavy.", icon="INFO")
-    layout.separator()
-    layout.use_property_split = True
-    layout.prop(editor, "input_lock_enabled")
-    row = layout.row(align=True)
-    row.operator("blendengine.editor_input_lock", text="Enable Lock", icon="LOCKED")
-    row.operator("blendengine.disable_editor_input_lock", text="Disable", icon="UNLOCKED")
+    row.scale_y = 1.2
+    if editor.input_lock_enabled:
+        row.operator("blendengine.disable_editor_input_lock", text="Game Keys: On", icon="LOCKED", depress=True)
+    else:
+        row.operator("blendengine.editor_input_lock", text="Game Keys: Off", icon="UNLOCKED")
 
 
 def _draw_component_tools(layout):
-    col = layout.column(align=True)
-    row = col.row(align=True)
-    row.operator("blendengine.add_player_controller", icon="OUTLINER_OB_ARMATURE")
-    row.operator("blendengine.add_collider", icon="MESH_CUBE")
-    row = col.row(align=True)
-    row.operator("blendengine.add_rigidbody", icon="MOD_PHYSICS")
-    row.operator("blendengine.add_trigger_zone", icon="EMPTY_AXIS")
-    row = col.row(align=True)
-    row.operator("blendengine.add_health_component", icon="FAKE_USER_ON")
-    row.operator("blendengine.add_game_behavior", icon="NODETREE")
-    row = col.row(align=True)
-    row.operator("blendengine.add_npc_behavior", icon="OUTLINER_OB_ARMATURE")
+    layout.label(text="Add Component", icon="ADD")
+    grid = _grid(layout, 2)
+    grid.operator("blendengine.add_player_controller", text="Player", icon="OUTLINER_OB_ARMATURE")
+    grid.operator("blendengine.add_collider", text="Collider", icon="MESH_CUBE")
+    grid.operator("blendengine.add_rigidbody", text="Rigidbody", icon="MOD_PHYSICS")
+    grid.operator("blendengine.add_trigger_zone", text="Trigger", icon="EMPTY_AXIS")
+    grid.operator("blendengine.add_health_component", text="Health", icon="FAKE_USER_ON")
+    grid.operator("blendengine.add_npc_behavior", text="NPC / AI", icon="GHOST_ENABLED")
+    grid.operator("blendengine.add_game_behavior", text="Rule", icon="NODETREE")
+    op = grid.operator("blendengine.add_component", text="Other", icon="PLUS")
+    op.component_type = "TRANSFORM"
 
 
 def _draw_components(layout, obj):
     settings = obj.blendengine_object
-    layout.use_property_split = True
-    layout.use_property_decorate = False
-
-    layout.prop(settings, "is_game_object")
-    layout.prop(settings, "object_tag")
+    layout.prop(settings, "is_game_object", text="Game Object", toggle=True, icon="CHECKBOX_HLT" if settings.is_game_object else "CHECKBOX_DEHLT")
+    layout.prop(settings, "object_tag", text="Tag", icon="BOOKMARKS")
     _draw_component_tools(layout)
 
-    row = layout.row()
-    row.template_list("BE_UL_components", "", settings, "components", settings, "active_component_index", rows=4)
-    col = row.column(align=True)
-    op = col.operator("blendengine.add_component", icon="ADD", text="")
-    op.component_type = "TRANSFORM"
+    layout.label(text="Components (%d)" % len(settings.components), icon="PROPERTIES")
+    layout.template_list("BE_UL_components", "", settings, "components", settings, "active_component_index", rows=3)
 
     component = utils.active_item(settings.components, settings.active_component_index)
     if component:
         box = layout.box()
-        box.prop(component, "name")
-        box.prop(component, "component_type")
-        box.prop(component, "enabled")
-        box.prop(component, "tag")
-        box.prop(component, "notes")
+        row = box.row(align=True)
+        row.prop(component, "enabled", text="")
+        row.prop(component, "name", text="")
+        box.prop(component, "component_type", text="")
+        box.prop(component, "tag", text="", icon="BOOKMARKS")
+        box.prop(component, "notes", text="", icon="TEXT")
 
 
 def _draw_player_controller(layout, obj):
@@ -439,6 +481,7 @@ def _draw_behavior_item_details(layout, behavior):
 
 def _draw_behaviors(layout, obj):
     settings = obj.blendengine_object
+    layout.label(text="Rules on %s" % obj.name, icon="NODETREE")
     row = layout.row()
     row.template_list("BE_UL_behaviors", "", settings, "behaviors", settings, "active_behavior_index", rows=3)
     col = row.column(align=True)
@@ -447,36 +490,28 @@ def _draw_behaviors(layout, obj):
 
     behavior = utils.active_item(settings.behaviors, settings.active_behavior_index)
     if not behavior:
+        layout.label(text="Add a rule: When ... If ... Do ...", icon="INFO")
         return
 
-    layout.use_property_split = True
-    layout.prop(behavior, "name")
-    layout.prop(behavior, "enabled")
-    layout.prop(behavior, "description")
+    row = layout.row(align=True)
+    row.prop(behavior, "enabled", text="")
+    row.prop(behavior, "name", text="")
+    layout.prop(behavior, "description", text="", icon="TEXT")
 
-    row = layout.row()
-    row.template_list("BE_UL_events", "", behavior, "events", behavior, "active_event_index", rows=2)
-    col = row.column(align=True)
-    op = col.operator("blendengine.behavior_item_add", icon="ADD", text="")
-    op.kind = "EVENT"
-    op = col.operator("blendengine.behavior_item_remove", icon="REMOVE", text="")
-    op.kind = "EVENT"
-
-    row = layout.row()
-    row.template_list("BE_UL_conditions", "", behavior, "conditions", behavior, "active_condition_index", rows=2)
-    col = row.column(align=True)
-    op = col.operator("blendengine.behavior_item_add", icon="ADD", text="")
-    op.kind = "CONDITION"
-    op = col.operator("blendengine.behavior_item_remove", icon="REMOVE", text="")
-    op.kind = "CONDITION"
-
-    row = layout.row()
-    row.template_list("BE_UL_actions", "", behavior, "actions", behavior, "active_action_index", rows=2)
-    col = row.column(align=True)
-    op = col.operator("blendengine.behavior_item_add", icon="ADD", text="")
-    op.kind = "ACTION"
-    op = col.operator("blendengine.behavior_item_remove", icon="REMOVE", text="")
-    op.kind = "ACTION"
+    for title, icon, collection, index, list_id, kind in (
+        ("WHEN  (events)", "TIME", "events", "active_event_index", "BE_UL_events", "EVENT"),
+        ("IF  (conditions)", "QUESTION", "conditions", "active_condition_index", "BE_UL_conditions", "CONDITION"),
+        ("DO  (actions)", "PLAY", "actions", "active_action_index", "BE_UL_actions", "ACTION"),
+    ):
+        box = layout.box()
+        box.label(text=title, icon=icon)
+        row = box.row()
+        row.template_list(list_id, "", behavior, collection, behavior, index, rows=2)
+        col = row.column(align=True)
+        op = col.operator("blendengine.behavior_item_add", icon="ADD", text="")
+        op.kind = kind
+        op = col.operator("blendengine.behavior_item_remove", icon="REMOVE", text="")
+        op.kind = kind
 
     _draw_behavior_item_details(layout, behavior)
 
@@ -597,85 +632,89 @@ def _draw_health(layout, obj):
 
 def _draw_test_run(layout, scene):
     project = scene.blendengine_project
-    layout.label(text="Dedicated Play Mode page", icon="SCREEN_BACK")
-    layout.label(text=project.test_status, icon="PLAY" if project.test_running else "PAUSE")
-    row = layout.row(align=True)
-    row.scale_y = 1.5
     if project.test_running:
-        row.operator("blendengine.stop_test_run", text="Stop Game", icon="PAUSE")
+        _primary(layout, "blendengine.stop_test_run", "Stop", "PAUSE")
     else:
-        row.operator("blendengine.test_run_scene", text="Run Game", icon="PLAY")
-    op = layout.operator("blendengine.open_page", text="Open Play Mode Page", icon="WINDOW")
+        _primary(layout, "blendengine.test_run_scene", "Play", "PLAY")
+    op = layout.operator("blendengine.open_page", text="Play Mode Page", icon="WINDOW")
     op.page = "PLAY"
+    layout.label(text=project.test_status, icon="PLAY" if project.test_running else "PAUSE")
 
-    layout.use_property_split = True
-    layout.prop(scene.blendengine_editor, "input_lock_enabled")
-    layout.prop(project, "show_fps")
-    layout.prop(project, "show_colliders")
-    layout.prop(project, "show_navigation")
-    layout.prop(project, "show_game_variables")
-    layout.prop(project, "show_logs")
-    layout.prop(project, "debug_mode")
-    layout.separator()
-    layout.label(text="Live Play HUD", icon="SEQ_HISTOGRAM")
-    grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
-    grid.label(text="FPS %.0f" % project.runtime_fps, icon="TIME")
-    grid.label(text="Frame %.1f ms" % project.runtime_frame_ms, icon="PREVIEW_RANGE")
-    grid.label(text="RAM %.0f MB" % project.runtime_memory_mb, icon="MEMORY")
-    grid.label(text="Visible %d" % project.runtime_visible_objects, icon="HIDE_OFF")
-    grid.label(text="Tris %d" % project.runtime_triangles_visible, icon="MESH_DATA")
-    grid.label(text="Draw %d" % project.runtime_draw_calls_estimated, icon="RENDERLAYERS")
+    _toggles(layout, (
+        (project, "show_fps", "FPS", "TIME"),
+        (project, "show_colliders", "Colliders", "MESH_CUBE"),
+        (project, "show_navigation", "AI Nav", "TRACKING"),
+        (project, "show_game_variables", "Variables", "PROPERTIES"),
+        (project, "show_logs", "Logs", "TEXT"),
+        (project, "debug_mode", "Debug", "CONSOLE"),
+    ))
+    _stat_cards(layout, (
+        ("%.0f" % project.runtime_fps, "FPS", "TIME"),
+        ("%.1f ms" % project.runtime_frame_ms, "Frame", "PREVIEW_RANGE"),
+        ("%.0f MB" % project.runtime_memory_mb, "RAM", "MEMORY"),
+        (_short_number(project.runtime_triangles_visible), "Triangles", "MESH_DATA"),
+    ))
 
 
 def _draw_build(layout, scene):
     project = scene.blendengine_project
     export = scene.blendengine_export
-    layout.use_property_split = True
-    layout.use_property_decorate = False
-    layout.prop(project, "target_platform")
-    row = layout.row(align=True)
-    for platform in ("WINDOWS", "LINUX", "MACOS"):
-        op = row.operator("blendengine.apply_platform_profile", text=platform.title())
+    layout.label(text="Platform", icon="EXPORT")
+    grid = _grid(layout, 3)
+    for platform, label in (("WINDOWS", "Windows"), ("LINUX", "Linux"), ("MACOS", "macOS"),
+                            ("IOS", "iOS"), ("ANDROID", "Android"), ("WEB", "Web")):
+        op = grid.operator("blendengine.apply_platform_profile", text=label, depress=project.target_platform == platform)
         op.platform = platform
-    row = layout.row(align=True)
-    for platform in ("IOS", "ANDROID", "WEB"):
-        op = row.operator("blendengine.apply_platform_profile", text=platform.title())
-        op.platform = platform
-    layout.prop(project, "build_folder")
-    layout.prop(export, "package_name")
-    layout.prop(export, "export_playable_project")
-    layout.prop(export, "export_assets")
-    layout.prop(export, "export_scene_package")
-    layout.prop(export, "include_debug_overlay")
-    layout.prop(export, "export_web_player")
+
+    col = layout.column(align=True)
+    col.prop(export, "package_name", text="", icon="PACKAGE")
+    col.prop(project, "build_folder", text="")
+
+    box = _section(layout, "Include", "CHECKBOX_HLT")
+    _toggles(box, (
+        (export, "export_playable_project", "Playable", "PLAY"),
+        (export, "export_assets", "Assets", "ASSET_MANAGER"),
+        (export, "export_scene_package", "Scene", "SCENE_DATA"),
+        (export, "include_debug_overlay", "Debug HUD", "CONSOLE"),
+    ))
+    box.prop(export, "export_web_player", text="3D Web Player", icon="WORLD", toggle=True)
+
     if export.export_web_player:
-        col = layout.column(align=True)
-        col.prop(export, "runtime_sky")
-        col.prop(export, "runtime_exposure")
-        col.prop(export, "runtime_bloom")
-        col.prop(export, "runtime_fog_density")
-        col.prop(export, "runtime_ssao")
-        col.prop(export, "runtime_builtin_rules")
-    layout.operator("blendengine.prepare_build", icon="EXPORT")
+        box = _section(layout, "Player Graphics", "SHADING_RENDERED")
+        box.prop(export, "runtime_sky", text="Sky")
+        col = box.column(align=True)
+        col.prop(export, "runtime_exposure", text="Exposure", slider=True)
+        col.prop(export, "runtime_bloom", text="Bloom", slider=True)
+        col.prop(export, "runtime_fog_density", text="Fog", slider=True)
+        _toggles(box, (
+            (export, "runtime_ssao", "AO", "SHADING_SOLID"),
+            (export, "runtime_builtin_rules", "Rules", "CHECKMARK"),
+        ))
+
+    _primary(layout, "blendengine.prepare_build", "Build Game", "EXPORT", scale=1.7)
 
 
 def _draw_game_creation(layout, scene):
     project = scene.blendengine_project
-    layout.use_property_split = True
-    layout.use_property_decorate = False
-    layout.prop(project, "game_dimension")
-    layout.prop(project, "target_platform")
     row = layout.row(align=True)
-    row.operator_context = "INVOKE_DEFAULT"
-    row.operator("blendengine.easy_create_game", text="Magic Create", icon="PLAY")
-    row.operator_context = "EXEC_DEFAULT"
+    row.prop(project, "game_dimension", expand=True)
+    layout.operator_context = "INVOKE_DEFAULT"
+    _primary(layout, "blendengine.easy_create_game", "Magic Create", "ADD")
+    layout.operator_context = "EXEC_DEFAULT"
+    layout.label(text="Start from a template", icon="FILE_NEW")
+    for operator, text, icon in (
+        ("blendengine.generate_basic_template", "3D Adventure World", "WORLD"),
+        ("blendengine.generate_cyberpunk_shooter_template", "Zombie Shooter (FPS)", "OUTLINER_OB_ARMATURE"),
+        ("blendengine.generate_2d_template", "2D Platformer", "IMAGE_DATA"),
+        ("blendengine.create_demo_sequence", "Add Film Sequence", "SEQUENCE"),
+    ):
+        row = layout.row()
+        row.scale_y = 1.3
+        row.operator(operator, text=text, icon=icon)
+    row = layout.row(align=True)
+    row.operator("blendengine.input_defaults", text="Reset Controls", icon="EVENT_W")
     op = row.operator("blendengine.open_page", text="Studio", icon="WINDOW")
     op.page = "STUDIO"
-    col = layout.column(align=True)
-    col.operator("blendengine.generate_cyberpunk_shooter_template", text="Cyberpunk Zombie Shooter", icon="OUTLINER_OB_ARMATURE")
-    col.operator("blendengine.generate_basic_template", text="3D Starter World", icon="SCENE_DATA")
-    col.operator("blendengine.generate_2d_template", text="2D Platformer", icon="IMAGE_DATA")
-    col.operator("blendengine.input_defaults", text="Reset Controls", icon="EVENT_W")
 
 
 def _draw_world_hierarchy(layout, scene):
@@ -699,14 +738,12 @@ def _draw_inspector(layout, context):
     if obj is None:
         layout.label(text="Select a gameplay object.", icon="INFO")
         return
-    layout.label(text=obj.name, icon="OUTLINER_OB_MESH")
-    layout.use_property_split = True
-    layout.use_property_decorate = False
-    layout.prop(obj, "location")
-    layout.prop(obj, "rotation_euler", text="Rotation")
-    layout.prop(obj, "scale")
-    layout.separator()
-    _draw_components(layout, obj)
+    icon = "OUTLINER_OB_CAMERA" if obj.type == "CAMERA" else "OUTLINER_OB_LIGHT" if obj.type == "LIGHT" else "OUTLINER_OB_MESH"
+    layout.prop(obj, "name", text="", icon=icon)
+    for prop, title in (("location", "Position"), ("rotation_euler", "Rotation"), ("scale", "Scale")):
+        layout.label(text=title)
+        row = layout.row(align=True)
+        row.prop(obj, prop, text="")
 
 
 def _draw_assets(layout):
@@ -1099,7 +1136,7 @@ class VIEW3D_PT_blendengine_quick_start(BE_View3DPanel, Panel):
 
 
 class VIEW3D_PT_blendengine_object(BE_View3DPanel, Panel):
-    bl_label = "Game Object Inspector"
+    bl_label = "Components"
     bl_category = "Inspector"
 
     def draw(self, context):
@@ -1236,7 +1273,7 @@ class VIEW3D_PT_blendengine_input(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_multiplayer(BE_View3DPanel, Panel):
     bl_label = "Multiplayer"
-    bl_category = "Ship"
+    bl_category = "Gameplay"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1245,7 +1282,7 @@ class VIEW3D_PT_blendengine_multiplayer(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_optimization(BE_View3DPanel, Panel):
     bl_label = "Streaming + Culling"
-    bl_category = "Ship"
+    bl_category = "Optimize"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1254,7 +1291,7 @@ class VIEW3D_PT_blendengine_optimization(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_budget(BE_View3DPanel, Panel):
     bl_label = "Frame Budget"
-    bl_category = "Ship"
+    bl_category = "Optimize"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -1263,7 +1300,7 @@ class VIEW3D_PT_blendengine_budget(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_analyzer(BE_View3DPanel, Panel):
     bl_label = "Scene Analyzer"
-    bl_category = "Ship"
+    bl_category = "Optimize"
 
     def draw(self, context):
         _draw_scene_analyzer(self.layout, context.scene)
@@ -1305,6 +1342,7 @@ class VIEW3D_PT_blendengine_plugins(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_test_run(BE_View3DPanel, Panel):
     bl_label = "Run Game"
+    bl_order = -10
     bl_category = "Play"
 
     def draw(self, context):
@@ -1321,6 +1359,7 @@ class VIEW3D_PT_blendengine_play_mode_console(BE_View3DPanel, Panel):
 
 class VIEW3D_PT_blendengine_build(BE_View3DPanel, Panel):
     bl_label = "Cross-Platform Build"
+    bl_order = -10
     bl_category = "Ship"
 
     def draw(self, context):
