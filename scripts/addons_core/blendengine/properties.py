@@ -769,6 +769,29 @@ class BE_ExportSettings(PropertyGroup):
     export_scene_package: bpy.props.BoolProperty(name="Scene Package", default=True)
     include_debug_overlay: bpy.props.BoolProperty(name="Debug Overlay", default=False)
     package_name: bpy.props.StringProperty(name="Package Name", default="BlendEngineBuild")
+    export_web_player: bpy.props.BoolProperty(
+        name="3D Runtime Player",
+        default=True,
+        description="Write the standalone WebGL2 3D runtime (meshes, materials, lights, physics, AI) for every target",
+    )
+    runtime_sky: bpy.props.EnumProperty(
+        name="Sky",
+        items=(
+            ("AUTO", "Auto", "Procedural daylight sky when the scene has a sun and a dark world, otherwise the world color"),
+            ("PROCEDURAL", "Procedural", "Physically inspired sky driven by the sun direction"),
+            ("WORLD", "World Color", "Use the Blender world color as sky and ambient light"),
+        ),
+        default="AUTO",
+    )
+    runtime_fog_density: bpy.props.FloatProperty(name="Fog Density", default=0.004, min=0.0, max=0.2, precision=4)
+    runtime_bloom: bpy.props.FloatProperty(name="Bloom", default=1.0, min=0.0, max=4.0)
+    runtime_ssao: bpy.props.BoolProperty(name="Ambient Occlusion", default=True, description="Screen-space ambient occlusion in the runtime player")
+    runtime_exposure: bpy.props.FloatProperty(name="Exposure", default=1.0, min=0.05, max=8.0)
+    runtime_builtin_rules: bpy.props.BoolProperty(
+        name="Built-in Game Rules",
+        default=True,
+        description="Coins add score, Health heals, Damage hurts, Checkpoints save, Goal/Exit/Portal triggers win",
+    )
 
 
 class BE_GameQualityProfile(PropertyGroup):

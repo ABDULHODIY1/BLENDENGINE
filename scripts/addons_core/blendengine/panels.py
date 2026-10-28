@@ -646,6 +646,15 @@ def _draw_build(layout, scene):
     layout.prop(export, "export_assets")
     layout.prop(export, "export_scene_package")
     layout.prop(export, "include_debug_overlay")
+    layout.prop(export, "export_web_player")
+    if export.export_web_player:
+        col = layout.column(align=True)
+        col.prop(export, "runtime_sky")
+        col.prop(export, "runtime_exposure")
+        col.prop(export, "runtime_bloom")
+        col.prop(export, "runtime_fog_density")
+        col.prop(export, "runtime_ssao")
+        col.prop(export, "runtime_builtin_rules")
     layout.operator("blendengine.prepare_build", icon="EXPORT")
 
 

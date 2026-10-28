@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>BlendEngine Game</title>
+<style>
+  :root { --accent: #00e6c3; --danger: #ff4d5e; --panel: rgba(8, 12, 14, .72); --text: #e8f3f1; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-user-select: none; user-select: none;
+    touch-action: none; overscroll-behavior: none; }
+  #view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+  .layer { position: fixed; inset: 0; pointer-events: none; }
+  .hidden { display: none !important; }
+  #hud-top { position: fixed; left: 16px; top: 14px; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  #health { width: 220px; height: 12px; border-radius: 7px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.18); overflow: hidden; }
+  #health > div { height: 100%; width: 100%; background: linear-gradient(90deg, #ff4d5e, #ffb84d 45%, #3ef08c); transition: width .15s; }
+  #stats { font-size: 14px; font-weight: 600; text-shadow: 0 1px 3px #000; display: flex; gap: 14px; flex-wrap: wrap; }
+  #perf { position: fixed; right: 12px; top: 10px; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; background: var(--panel);
+    padding: 6px 9px; border-radius: 6px; white-space: pre; pointer-events: none; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; pointer-events: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: rgba(255,255,255,.85); box-shadow: 0 0 2px #000; }
+  #crosshair::before { left: 10px; top: 2px; width: 2px; height: 18px; }
+  #crosshair::after { top: 10px; left: 2px; height: 2px; width: 18px; }
+  #crosshair.hit::before, #crosshair.hit::after { background: var(--danger); }
+  #toasts { position: fixed; left: 50%; bottom: 18%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+  .toast { background: var(--panel); padding: 7px 14px; border-radius: 18px; font-size: 14px; animation: toast 2.6s forwards; }
+  @keyframes toast { 0% { opacity: 0; transform: translateY(8px); } 10%, 75% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+  #damage { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 160px rgba(255, 30, 40, .85); opacity: 0; transition: opacity .25s; }
+  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+    background: radial-gradient(ellipse at center, rgba(0,20,18,.72), rgba(0,0,0,.9)); pointer-events: auto; text-align: center; padding: 24px; }
+  .screen h1 { margin: 0; font-size: clamp(28px, 6vw, 54px); letter-spacing: .02em; }
+  .screen p { margin: 0; opacity: .85; max-width: 560px; line-height: 1.5; }
+  .screen button { pointer-events: auto; font: inherit; font-weight: 700; font-size: 17px; color: #001a16; background: var(--accent);
+    border: 0; border-radius: 26px; padding: 12px 34px; cursor: pointer; }
+  .screen button.secondary { background: rgba(255,255,255,.14); color: var(--text); }
+  #progress { width: min(320px, 70vw); height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; }
+  #progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .controls { font-size: 13px; opacity: .7; }
+  #touch { position: fixed; inset: 0; pointer-events: none; }
+  #stick { position: fixed; left: 6vw; bottom: 8vh; width: 130px; height: 130px; border-radius: 50%; background: rgba(255,255,255,.08);
+    border: 2px solid rgba(255,255,255,.22); pointer-events: auto; }
+  #stick > div { position: absolute; left: 40px; top: 40px; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,.35); }
+  #look { position: fixed; right: 0; top: 0; width: 55vw; height: 100vh; pointer-events: auto; }
+  .tbtn { position: fixed; width: 66px; height: 66px; border-radius: 50%; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.28);
+    color: #fff; font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; pointer-events: auto; }
+  #error { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 30px; text-align: center; background: #120708; }
+</style>
+</head>
+<body>
+<canvas id="view" tabindex="0"></canvas>
+<div id="hud" class="layer hidden">
+  <div id="hud-top"><div id="health"><div></div></div><div id="stats"></div></div>
+  <div id="crosshair" class="hidden"></div>
+  <div id="perf" class="hidden"></div>
+  <div id="toasts"></div>
+  <div id="damage"></div>
+</div>
+<div id="touch" class="hidden">
+  <div id="look"></div>
+  <div id="stick"><div></div></div>
+  <div class="tbtn" data-action="JUMP" style="right:5vw;bottom:9vh">JUMP</div>
+  <div class="tbtn" data-action="ATTACK" style="right:calc(5vw + 82px);bottom:16vh">FIRE</div>
+  <div class="tbtn" data-action="INTERACT" style="right:5vw;bottom:calc(9vh + 82px)">USE</div>
+  <div class="tbtn" data-action="SPRINT" style="right:calc(5vw + 164px);bottom:9vh">RUN</div>
+  <div class="tbtn" data-action="PAUSE" style="right:14px;top:14px;width:44px;height:44px">II</div>
+</div>
+<div id="loading" class="screen">
+  <h1 id="title">BlendEngine</h1>
+  <div id="progress"><div></div></div>
+  <p id="loading-text">Loading world…</p>
+</div>
+<div id="menu" class="screen hidden">
+  <h1 id="menu-title"></h1>
+  <p id="menu-text"></p>
+  <button id="menu-play">Play</button>
+  <button id="menu-restart" class="secondary hidden">Restart</button>
+  <p class="controls" id="menu-controls"></p>
+</div>
+<script src="scene_data.js"></script>
+<script src="blendengine_runtime.js"></script>
+<script src="game_scripts.js"></script>
+<script>BlendEngine.boot(window.BLENDENGINE_SCENE);</script>
+</body>
+</html>

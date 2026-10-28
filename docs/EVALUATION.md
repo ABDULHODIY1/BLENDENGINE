@@ -4,7 +4,19 @@
 
 ## Dalillar holati
 
-Bu hujjatda yangi o‘lchangan natija e’lon qilinmagan.
+Quyidagi 3D runtime o'lchovlari aniq muhit bilan qayd etilgan; boshqa yo'nalishlar hali o'lchanmagan.
+
+## 3D Runtime o'lchovlari
+
+| Maydon | Qiymat |
+|---|---|
+| Muhit | Linux konteyner, Blender `bpy` 5.2.3 moduli (headless), Chromium (Playwright) SwiftShader dasturiy GPU |
+| Ssenariy | `tests/runtime_web/export_templates.py` bilan eksport qilingan 3D Starter World va Cyberpunk Zombie Shooter |
+| Eksport vaqti | Starter: ~0.06 s (52 mesh, 6 809 uchburchak); Shooter: ~0.2 s (83 mesh, 57 360 uchburchak) |
+| Gameplay testi | `tests/runtime_web/gameplay_test.js` — 13/13 tekshiruv o'tdi |
+| Eksport testi | `tests/python/blendengine_scene_export_test.py` — 7/7 o'tdi |
+| Editor Test Run qadami (120 kadr o'rtachasi) | Starter: 3.2 → 1.5 ms; Shooter: 4.4 → 1.5 ms (`bpy` headless, viewport chizishsiz) |
+| Cheklov | FPS qiymatlari dasturiy renderda olingan va haqiqiy GPU'dagi tezlikni ko'rsatmaydi; haqiqiy qurilmalarda o'lchanmagan |
 
 ## Nima o‘lchanadi?
 

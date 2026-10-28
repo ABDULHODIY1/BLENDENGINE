@@ -1,7 +1,7 @@
 <!-- z3wax:presentation:start -->
 ![BlendEngine](docs/brand/banner.svg)
 
-[Loyiha xaritasi va misol](docs/PROJECT_GUIDE.md) · [Roadmap](ROADMAP.md) · [Baholash](docs/EVALUATION.md) · [Changelog](CHANGELOG.md) · [Relizlar](docs/RELEASING.md)
+[Loyiha xaritasi va misol](docs/PROJECT_GUIDE.md) · [3D Runtime](docs/RUNTIME.md) · [Roadmap](ROADMAP.md) · [Baholash](docs/EVALUATION.md) · [Changelog](CHANGELOG.md) · [Relizlar](docs/RELEASING.md)
 
 [![Documentation](https://github.com/z3wax/BlendEngine/actions/workflows/documentation.yml/badge.svg)](https://github.com/z3wax/BlendEngine/actions/workflows/documentation.yml)
 
@@ -20,6 +20,15 @@ Blender manba kodiga tayangan, o'yin ishlab chiqish va interaktiv 3D ish jarayon
 ## Holat
 
 Repozitoriy Blender manba daraxti va build vositalarini o'z ichiga oladi. O'yinga yo'naltirilgan editor, runtime va eksport yo'nalishlari rivojlantirish maqsadlari sifatida baholanadi; bu README ularning barchasi tayyor ekanini da'vo qilmaydi.
+
+## 3D Runtime (yangi)
+
+![3D Starter World](docs/images/runtime_3d_starter.png)
+
+Har bir eksport endi Blender'siz ishlaydigan, bog'liqliksiz **WebGL2 3D o'yin playerini** (`web_player/index.html`) yaratadi:
+PBR shading, yumshoq soyalar, prosedural osmon, bloom, SSAO, ACES tone mapping, FXAA, dinamik resolution,
+personaj fizikasi, NPC AI, qurollar, no-code behavior tizimi, gamepad va telefon uchun touch boshqaruv.
+Batafsil: [docs/RUNTIME.md](docs/RUNTIME.md).
 
 ## Manba tuzilmasi
 
