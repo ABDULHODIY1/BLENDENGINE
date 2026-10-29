@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# "Kristall Vodiysi" (Crystal Valley) - an example game built entirely with
-# BlendEngine's own tools: components, no-code behaviors, NPC AI templates,
-# triggers, a door, an animated lift and an intro cutscene on the timeline.
+# "Kristall Vodiysi" (Crystal Valley) - a third-person shooter built entirely
+# with BlendEngine's own tools: animated soldiers (skeletal animation, four
+# weapon types, eight uniforms), squad AI that takes positions and fires
+# bursts, components, no-code behaviors, triggers, a door, an animated lift
+# and an intro cutscene on the timeline.
 #
 # Run inside BlendEngine (or any Blender with the add-on):
 #   blendengine --python examples/kristall_vodiysi/build_game.py
 #   blendengine --background --python examples/kristall_vodiysi/build_game.py -- --export <out_dir>
 #
-# Goal: collect the 8 crystals, survive the guardians and the lava, open the
-# gate with E and step into the portal.
+# Goal: fight through the squads guarding the valley, collect the 8 crystals,
+# open the gate with E and step into the portal.
 
 import math
 import os
@@ -23,11 +25,27 @@ if ADDONS not in sys.path:
     sys.path.insert(0, ADDONS)
 
 import blendengine  # noqa: E402
-from blendengine import components, export_system, input_system, optimization, utils  # noqa: E402
+from blendengine import characters, components, export_system, input_system, optimization, utils  # noqa: E402
 from blendengine import templates as T  # noqa: E402
 
 CRYSTALS = [(-14, -8), (-9, 6), (-3, 13), (4, 9), (10, 14), (14, 2), (8, -9), (-2, -13)]
-ENEMIES = [((-8, 10), "PATROL"), ((9, 5), "ATTACK"), ((3, -10), "ATTACK")]
+# Squads: (position, facing degrees, body, uniform, weapon, AI template, health).
+ENEMIES = [
+    ((-8, 10), 200, "re_soldier_male", "desert", "rifle", "PATROL", 100),
+    ((-5, 13), 180, "re_soldier_female", "desert", "smg", "GUARD_AREA", 90),
+    ((-11, 9), 160, "re_soldier_male", "olive", "shotgun", "PATROL", 110),
+    ((9, 5), 230, "re_soldier_female", "blackops", "rifle", "GUARD_AREA", 100),
+    ((11, 9), 250, "re_soldier_male", "blackops", "smg", "PATROL", 100),
+    ((12, -6), 270, "re_soldier_male", "crimson", "pistol", "GUARD_AREA", 90),
+    ((3, -10), 120, "re_soldier_male", "forest", "rifle", "PATROL", 100),
+    ((6, -13), 100, "re_soldier_female", "forest", "shotgun", "GUARD_AREA", 100),
+    ((-3, -15), 80, "re_soldier_male", "arctic", "smg", "PATROL", 100),
+    ((14, 13), 225, "re_soldier_male", "crimson", "shotgun", "ENEMY_BOSS", 260),
+    ((15, 7), 240, "re_soldier_female", "urban", "rifle", "GUARD_AREA", 110),
+]
+COVER = [((-6, -2), (2.6, 0.5, 1.1), 10), ((3, 4), (0.5, 2.8, 1.2), 0), ((8, -2), (2.4, 0.5, 1.0), -20), ((-2, 9), (2.0, 0.5, 1.1), 35),
+         ((10, 12), (0.5, 2.6, 1.2), 0), ((-12, 6), (2.2, 0.5, 1.0), 70), ((1, -7), (2.8, 0.5, 1.1), 0), ((13, 0), (0.5, 2.4, 1.1), 15)]
+CRATES = [(-8, -6), (-7.2, -6.4), (5, 9), (9, 0), (12.5, -9), (-14, 0), (0.5, 12), (6, -6)]
 
 
 def ensure_addon():
@@ -133,29 +151,19 @@ def build(context):
     for index, (x, y) in enumerate(((-7, -6), (7, 12), (-15, 9), (12, -13), (1, 16))):
         T._add_rock(context, "KV_Rock_%02d" % index, (x, y, 0.35), dark_stone, scale=1.2 + index * 0.15)
 
-    # Hero: body with a head and a crown, third-person controller.
-    bpy.ops.mesh.primitive_cylinder_add(vertices=20, radius=0.38, depth=1.3, location=(-12, -11, 0.65))
-    player = context.object
-    player.name = "KV_Hero"
-    T._assign_material(player, hero)
-    T._shade_smooth(player)
-    bpy.ops.mesh.primitive_uv_sphere_add(radius=0.3, location=(-12, -11, 1.55))
-    head = context.object
-    head.name = "KV_Hero_Head"
-    T._assign_material(head, skin)
-    T._shade_smooth(head)
-    head.parent = player
-    head.matrix_parent_inverse = player.matrix_world.inverted()
+    # Hero: an animated soldier with a rifle, third-person over-the-shoulder shooter.
+    player = characters.add_character(context, "re_soldier_male", "KV_Hero", (-12.0, -11.0, 0.0), yaw=math.radians(-20.0), variant="navy", weapon="rifle")
     components.add_player_controller(player)
     controller = player.blendengine_object.player_controller
     controller.controller_type = "THIRD_PERSON"
-    controller.walk_speed = 5.5
-    controller.run_speed = 9.0
-    controller.jump_force = 6.0
+    controller.walk_speed = 3.6
+    controller.run_speed = 6.8
+    controller.jump_force = 5.5
     components.add_collider(player, tag="Player")
     components.add_health(player, max_health=100.0)
     optimization.mark_dynamic_object(player)
     add_variable(player, "Score", "INT", 0)
+    add_variable(player, "Ammo", "INT", 150)
     add_variable(player, "IntroPlayed", "INT", 0)
     # Intro cutscene once, right after the game starts.
     add_behavior(
@@ -198,21 +206,36 @@ def build(context):
     components.add_trigger_zone(spring)
     spring.blendengine_object.object_tag = "Health"
 
-    # Guardians: NPC AI templates with health.
-    for index, ((x, y), template) in enumerate(ENEMIES):
-        bpy.ops.mesh.primitive_cone_add(vertices=16, radius1=0.55, radius2=0.2, depth=1.7, location=(x, y, 0.85))
-        enemy = context.object
-        enemy.name = "KV_Guardian_%02d" % (index + 1)
-        T._assign_material(enemy, guardian)
-        T._shade_smooth(enemy)
+    # Squads of armed soldiers: every one has its own body, uniform and weapon.
+    for index, ((x, y), facing, body, uniform, weapon, template, hp) in enumerate(ENEMIES):
+        enemy = characters.add_character(context, body, "KV_Soldier_%02d" % (index + 1), (x, y, 0.0), yaw=math.radians(facing), variant=uniform, weapon=weapon,
+                                          scale=1.08 if template == "ENEMY_BOSS" else 0.97 + (index % 3) * 0.03)
+        enemy.blendengine_object.object_tag = "Enemy"
         components.add_collider(enemy, tag="Enemy")
-        components.add_health(enemy, max_health=60.0)
+        components.add_health(enemy, max_health=float(hp))
         npc = components.add_npc_behavior(enemy, template, target=player)
-        npc.move_speed = 2.3
+        npc.move_speed = 2.6 if weapon != "shotgun" else 3.2
         npc.patrol_radius = 4.0
-        npc.detection_range = 9.0
+        npc.detection_range = 24.0 if weapon in ("rifle", "pistol") else 18.0
         npc.attack_range = 1.3
         optimization.mark_dynamic_object(enemy)
+
+    # Cover: sandbag walls and crates.
+    sand = mat("KV_Sandbag", (0.42, 0.37, 0.26, 1.0), roughness=0.95)
+    crate_mat = mat("KV_Crate", (0.36, 0.25, 0.12, 1.0), roughness=0.75)
+    for index, ((x, y), dims, rot) in enumerate(COVER):
+        wall = T._cube(context, "KV_Cover_%02d" % index, (x, y, dims[2] / 2), dims, sand, "Wall")
+        wall.rotation_euler.z = math.radians(rot)
+    for index, (x, y) in enumerate(CRATES):
+        crate = T._cube(context, "KV_Crate_%02d" % index, (x, y, 0.45), (0.9, 0.9, 0.9), crate_mat, "Wall")
+        crate.rotation_euler.z = math.radians(index * 23 % 90)
+
+    # Ammo boxes (built-in Ammo rule: +30 rounds).
+    ammo_mat = mat("KV_Ammo", (0.2, 0.32, 0.12, 1.0), roughness=0.5, metallic=0.3, emission=(0.6, 0.9, 0.2, 1.0), emission_strength=0.6)
+    for index, (x, y) in enumerate(((-10, -4), (2, 2), (10, -11), (-6, 15), (13, 3))):
+        box = T._cube(context, "KV_Ammo_%02d" % index, (x, y, 0.25), (0.6, 0.4, 0.35), ammo_mat, "", static=False)
+        components.add_trigger_zone(box)
+        box.blendengine_object.object_tag = "Ammo"
 
     # Gate in front of the portal (Door component, opened with E).
     gate = T._cube(context, "KV_Gate", (16, 10, 1.5), (0.6, 5.0, 3.0), dark_stone, "Door")

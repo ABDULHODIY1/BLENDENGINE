@@ -4,6 +4,8 @@
 
 ### Engine
 
+- **Animatsiyali askarlar va otishma:** skelet animatsiya (GPU skinning, qatlamli kliplar, nishonga olish), 2 tana × 8 forma × 4 qurol, masofadan otuvchi squad AI, headshot, sog'liq tiklanishi, o'q-dori/qayta o'qlash. Kristall Vodiysi — third-person shooter.
+- **Kino darajasidagi realtime render:** TAA + temporal upscaling, SSR, volumetric yorug'lik, kontakt soyalar; VFX: tracer, muzzle flash yorug'ligi, uchqun, qon, gilza, tutun, decal, kamera silkinishi.
 - **Build Game = haqiqiy o'yin:** `.exe` (Windows), Linux dasturi, macOS `.app`, bitta faylli `<Game>.html` va web ZIP; build tugashi bilan o'yin ochiladi. `.blend`/`.py` fayllar faqat so'ralganda (`launchers/launcher.c`, `game_package.py`).
 - **Grafika:** ikki kaskadli soyalar, prosedural sirt detallari, suv, instanced o't, bulutlar, god rays, auto exposure, sharpen.
 - **Optimizatsiya:** GPU instancing (sahna + soya), eksportda geometriya hash bo'yicha mesh birlashtirish, sub-pixel culling, soyada mayda obyektlarni tashlash, uzoq kaskadni har 2-kadrda yangilash.

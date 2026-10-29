@@ -729,6 +729,93 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
 
     objects_by_name = {entry["name"]: entry for entry in game_data.get("objects", [])}
 
+    # Skinned characters and their weapons (assets/characters, assets/weapons).
+    characters = {}
+    weapons = {}
+    character_materials = {}
+
+    def asset_texture(path, srgb):
+        image = bpy.data.images.load(path, check_existing=True)
+        if not srgb:
+            image.colorspace_settings.name = "Non-Color"
+        return texture_index(image, srgb)
+
+    def asset_material(name, folder, base, normal, orm, emit, metallic=0.35):
+        if name in character_materials:
+            return character_materials[name]
+        j = lambda rel: os.path.normpath(os.path.join(folder, rel))  # noqa: E731
+        materials.append({
+            "name": name, "baseColor": [1.0, 1.0, 1.0, 1.0], "metallic": metallic, "roughness": 1.0,
+            "emission": [1.0, 1.0, 1.0], "emissionStrength": 2.0, "alpha": 1.0, "blend": False, "doubleSided": False,
+            "baseColorTexture": asset_texture(j(base), True), "normalTexture": asset_texture(j(normal), False),
+            "roughnessTexture": asset_texture(j(orm), False), "emissionTexture": asset_texture(j(emit), True),
+            "normalStrength": 1.0, "character": True,
+        })
+        character_materials[name] = len(materials) - 1
+        return character_materials[name]
+
+    def copy_array(blob, offset, nbytes):
+        return writer.add_bytes(blob[offset:offset + nbytes])
+
+    def weapon_index(ident):
+        if not ident:
+            return None
+        if ident in weapons:
+            return ident
+        from . import characters as character_assets
+        try:
+            folder, info, blob = character_assets.load_weapon(ident)
+        except OSError:
+            return None
+        m = info["mesh"]
+        count = m["vertexCount"]
+        t = info["textures"]
+        material = asset_material("BE_Weapon_%s" % ident, folder, t["base"], t["normal"], t["orm"], t["emit"], metallic=0.6)
+        meshes.append({
+            "name": "BE_Weapon_%s" % ident, "vertexCount": count,
+            "position": copy_array(blob, m["position"], count * 12), "normal": copy_array(blob, m["normal"], count * 12),
+            "uv": copy_array(blob, m["uv"], count * 8), "indexType": "uint16",
+            "index": copy_array(blob, m["index"], m["indexCount"] * 2), "indexCount": m["indexCount"],
+            "primitives": [{"material": material, "first": 0, "count": m["indexCount"]}],
+            "boundsMin": m["boundsMin"], "boundsMax": m["boundsMax"],
+            "center": [(a + b) * 0.5 for a, b in zip(m["boundsMin"], m["boundsMax"])],
+            "radius": 0.5 * math.dist(m["boundsMin"], m["boundsMax"]),
+        })
+        weapons[ident] = {"mesh": len(meshes) - 1, "muzzle": info["muzzle"], "length": info["length"]}
+        return ident
+
+    def character_index(ident, variant):
+        from . import characters as character_assets
+        folder, info, blob = character_assets.load_character(ident)
+        if ident not in characters:
+            m = info["mesh"]
+            count = m["vertexCount"]
+            n = len(info["joints"])
+            index_size = 2 if m["indexType"] == "uint16" else 4
+            clips = {}
+            for name, clip in info["clips"].items():
+                clips[name] = dict(clip, offset=copy_array(blob, clip["offset"], clip["frames"] * n * 8 * 4))
+            characters[ident] = {
+                "joints": info["joints"], "upperBody": info["upperBody"], "sockets": info["sockets"], "height": info["height"],
+                "bindLocal": copy_array(blob, info["bindLocal"], n * 10 * 4),
+                "inverseBind": copy_array(blob, info["inverseBind"], n * 64),
+                "mesh": {
+                    "vertexCount": count, "indexType": m["indexType"], "indexCount": m["indexCount"],
+                    "position": copy_array(blob, m["position"], count * 12), "normal": copy_array(blob, m["normal"], count * 12),
+                    "uv": copy_array(blob, m["uv"], count * 8), "joints": copy_array(blob, m["joints"], count * 4),
+                    "weights": copy_array(blob, m["weights"], count * 4), "index": copy_array(blob, m["index"], m["indexCount"] * index_size),
+                    "boundsMin": m["boundsMin"], "boundsMax": m["boundsMax"],
+                },
+                "clips": clips, "materials": {},
+            }
+        variants = info["variants"]
+        variant = variant if variant in variants else next(iter(variants))
+        if variant not in characters[ident]["materials"]:
+            v, t = variants[variant], info["textures"]
+            skin = os.path.basename(os.path.dirname(os.path.normpath(os.path.join(folder, v["base"]))))
+            characters[ident]["materials"][variant] = asset_material("BE_%s_%s" % (skin, variant), folder, v["base"], t["normal"], t["orm"], v["emit"])
+        return ident, variant
+
     exported = [
         obj for obj in scene.objects
         if obj.type in RENDERABLE_TYPES | {"LIGHT", "CAMERA", "EMPTY"}
@@ -754,7 +841,15 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
             "blocking": _blocks_movement(obj, game_entry),
         }
         node.update(_trs(local))
-        if obj.type in RENDERABLE_TYPES:
+        character = obj.get("be_character") if obj.type == "MESH" else None
+        if character:
+            try:
+                ident, variant = character_index(str(character), str(obj.get("be_variant", "")))
+                node["character"] = {"asset": ident, "variant": variant, "weapon": weapon_index(str(obj.get("be_weapon", "")))}
+            except (OSError, KeyError) as ex:
+                print("[BlendEngine] Character %s skipped: %s" % (obj.name, ex))
+                node["mesh"] = mesh_index(obj)
+        elif obj.type in RENDERABLE_TYPES:
             node["mesh"] = mesh_index(obj)
             if obj.type == "FONT":
                 node["castShadow"] = False
@@ -789,6 +884,8 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
             "gamma": float(view.gamma),
         },
         "game": game_data,
+        "characters": characters,
+        "weapons": weapons,
     }, writer.getvalue()
 
 
@@ -864,6 +961,73 @@ def export_scene_package(context, scene, game_data, directory):
         "binary_bytes": len(binary),
     }
     return ["scene_data.js"], stats
+
+
+# -----------------------------------------------------------------------------
+# Native game pack (runtime_native/): one binary file the C runtime reads directly.
+#
+#   "BEPAK001"  u32 json_size  u32 blob_size  json (utf-8)  padding to 16  blob
+#
+# The blob holds the mesh arrays followed by raw RGBA8 textures (top row first),
+# so the native player needs no image decoder.
+
+PACK_MAGIC = b"BEPAK001"
+
+
+def _image_rgba(image, max_size):
+    """Return (width, height, RGBA8 bytes top row first) for an image, or None."""
+    if np is None:
+        return None
+    copy = image.copy()
+    try:
+        width, height = tuple(copy.size)
+        if not width or not height:
+            return None
+        if max_size and max(width, height) > max_size:
+            factor = float(max_size) / max(width, height)
+            copy.scale(max(1, int(width * factor)), max(1, int(height * factor)))
+            width, height = tuple(copy.size)
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        copy.pixels.foreach_get(pixels)
+        pixels = pixels.reshape(height, width, 4)
+        if copy.is_float and image.colorspace_settings.name.lower() not in {"non-color", "raw", "linear"}:
+            rgb = np.clip(pixels[..., :3], 0.0, None)
+            pixels[..., :3] = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1.0 / 2.4) - 0.055)
+        data = (np.clip(pixels[::-1], 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+        return width, height, data.tobytes()
+    except Exception as ex:
+        print("[BlendEngine] Texture %s skipped for native pack: %s" % (image.name, ex))
+        return None
+    finally:
+        bpy.data.images.remove(copy)
+
+
+def write_native_pack(path, scene_dict, binary, max_texture=2048):
+    """Write game.bepak for the native runtime. Returns the file size."""
+    payload = dict(scene_dict)
+    blob = bytearray(binary)
+    textures = []
+    for entry in scene_dict.get("textures", []):
+        image = bpy.data.images.get(entry["name"])
+        rgba = _image_rgba(image, max_texture) if image is not None else None
+        if rgba is None:
+            textures.append({"name": entry["name"], "srgb": entry["srgb"], "width": 0, "height": 0, "offset": -1})
+            continue
+        width, height, data = rgba
+        blob.extend(b"\0" * ((-len(blob)) % 16))
+        textures.append({"name": entry["name"], "srgb": entry["srgb"], "width": width, "height": height, "offset": len(blob)})
+        blob.extend(data)
+    payload["textures"] = textures
+    text = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(PACK_MAGIC)
+        handle.write(len(text).to_bytes(4, "little"))
+        handle.write(len(blob).to_bytes(4, "little"))
+        handle.write(text)
+        handle.write(b"\0" * ((-(16 + len(text))) % 16))
+        handle.write(bytes(blob))
+    return os.path.getsize(path)
 
 
 def runtime_source_dir():

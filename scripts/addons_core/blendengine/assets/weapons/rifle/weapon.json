@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineWeapon",
+ "version": 1,
+ "id": "rifle",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team (redeclipse.net)",
+ "source": "Red Eclipse 1.6 weapons/rifle/rifle.md5mesh",
+ "mesh": {
+  "vertexCount": 741,
+  "position": 0,
+  "normal": 8896,
+  "uv": 17792,
+  "indexType": "uint16",
+  "index": 23728,
+  "indexCount": 3216,
+  "boundsMin": [
+   -0.05295279112337998,
+   -0.34428469248173077,
+   -0.07426346567130006
+  ],
+  "boundsMax": [
+   0.05254427650254307,
+   0.6757153075182694,
+   0.2864760471750545
+  ]
+ },
+ "muzzle": [
+  0.0,
+  0.6768872314846631,
+  0.1561116860123145
+ ],
+ "length": 1.02,
+ "textures": {
+  "base": "base.png",
+  "normal": "normal.png",
+  "orm": "orm.png",
+  "emit": "emit.png"
+ }
+}

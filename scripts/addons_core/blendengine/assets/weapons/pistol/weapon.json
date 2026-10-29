@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineWeapon",
+ "version": 1,
+ "id": "pistol",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team (redeclipse.net)",
+ "source": "Red Eclipse 1.6 weapons/pistol/pistol-item.md5mesh",
+ "mesh": {
+  "vertexCount": 695,
+  "position": 0,
+  "normal": 8352,
+  "uv": 16704,
+  "indexType": "uint16",
+  "index": 22272,
+  "indexCount": 2337,
+  "boundsMin": [
+   -0.012141606840224254,
+   -0.06530117379306025,
+   -0.06207273828207919
+  ],
+  "boundsMax": [
+   0.01333300853636044,
+   0.17469882620693974,
+   0.10050327290949647
+  ]
+ },
+ "muzzle": [
+  0.0,
+  0.16351226166572125,
+  0.08297175310326106
+ ],
+ "length": 0.24,
+ "textures": {
+  "base": "base.png",
+  "normal": "normal.png",
+  "orm": "orm.png",
+  "emit": "emit.png"
+ }
+}

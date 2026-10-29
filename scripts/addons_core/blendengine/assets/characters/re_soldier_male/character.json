@@ -1,0 +1,614 @@
+{
+ "format": "BlendEngineCharacter",
+ "version": 1,
+ "id": "re_soldier_male",
+ "source": "Red Eclipse 1.6 player model (actors/player/male/RE_Player_male.iqm)",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team (redeclipse.net)",
+ "joints": [
+  {
+   "name": "hips",
+   "parent": -1
+  },
+  {
+   "name": "spine",
+   "parent": 0
+  },
+  {
+   "name": "thigh.L.01",
+   "parent": 0
+  },
+  {
+   "name": "thigh.R.01",
+   "parent": 0
+  },
+  {
+   "name": "ribs",
+   "parent": 1
+  },
+  {
+   "name": "thigh.L.02",
+   "parent": 2
+  },
+  {
+   "name": "thigh.R.02",
+   "parent": 3
+  },
+  {
+   "name": "shoulder.L",
+   "parent": 4
+  },
+  {
+   "name": "shoulder.R",
+   "parent": 4
+  },
+  {
+   "name": "neck",
+   "parent": 4
+  },
+  {
+   "name": "shin.L.01",
+   "parent": 5
+  },
+  {
+   "name": "shin.R.01",
+   "parent": 6
+  },
+  {
+   "name": "upper_arm.L.01",
+   "parent": 7
+  },
+  {
+   "name": "upper_arm.R.01",
+   "parent": 8
+  },
+  {
+   "name": "head",
+   "parent": 9
+  },
+  {
+   "name": "shin.L.02",
+   "parent": 10
+  },
+  {
+   "name": "shin.R.02",
+   "parent": 11
+  },
+  {
+   "name": "upper_arm.L.02",
+   "parent": 12
+  },
+  {
+   "name": "upper_arm.R.02",
+   "parent": 13
+  },
+  {
+   "name": "tag_head",
+   "parent": 14
+  },
+  {
+   "name": "foot.L",
+   "parent": 15
+  },
+  {
+   "name": "foot.R",
+   "parent": 16
+  },
+  {
+   "name": "forearm.L.01",
+   "parent": 17
+  },
+  {
+   "name": "forearm.R.01",
+   "parent": 18
+  },
+  {
+   "name": "toe.L",
+   "parent": 20
+  },
+  {
+   "name": "toe.R",
+   "parent": 21
+  },
+  {
+   "name": "forearm.L.02",
+   "parent": 22
+  },
+  {
+   "name": "forearm.R.02",
+   "parent": 23
+  },
+  {
+   "name": "hand.L",
+   "parent": 26
+  },
+  {
+   "name": "hand.R",
+   "parent": 27
+  },
+  {
+   "name": "palm.04.L",
+   "parent": 28
+  },
+  {
+   "name": "palm.01.L",
+   "parent": 28
+  },
+  {
+   "name": "palm.02.L",
+   "parent": 28
+  },
+  {
+   "name": "palm.03.L",
+   "parent": 28
+  },
+  {
+   "name": "palm.04.R",
+   "parent": 29
+  },
+  {
+   "name": "palm.03.R",
+   "parent": 29
+  },
+  {
+   "name": "palm.02.R",
+   "parent": 29
+  },
+  {
+   "name": "palm.01.R",
+   "parent": 29
+  },
+  {
+   "name": "finger_pinky.01.L.01",
+   "parent": 30
+  },
+  {
+   "name": "finger_index.01.L.01",
+   "parent": 31
+  },
+  {
+   "name": "thumb.01.L.01",
+   "parent": 31
+  },
+  {
+   "name": "finger_middle.01.L.01",
+   "parent": 32
+  },
+  {
+   "name": "finger_ring.01.L.01",
+   "parent": 33
+  },
+  {
+   "name": "finger_pinky.01.R.01",
+   "parent": 34
+  },
+  {
+   "name": "finger_ring.01.R.01",
+   "parent": 35
+  },
+  {
+   "name": "finger_middle.01.R.01",
+   "parent": 36
+  },
+  {
+   "name": "thumb.01.R.01",
+   "parent": 37
+  },
+  {
+   "name": "finger_index.01.R.01",
+   "parent": 37
+  },
+  {
+   "name": "finger_pinky.01.L.02",
+   "parent": 38
+  },
+  {
+   "name": "finger_index.01.L.02",
+   "parent": 39
+  },
+  {
+   "name": "thumb.01.L.02",
+   "parent": 40
+  },
+  {
+   "name": "finger_middle.01.L.02",
+   "parent": 41
+  },
+  {
+   "name": "finger_ring.01.L.02",
+   "parent": 42
+  },
+  {
+   "name": "finger_pinky.01.R.02",
+   "parent": 43
+  },
+  {
+   "name": "finger_ring.01.R.02",
+   "parent": 44
+  },
+  {
+   "name": "finger_middle.01.R.02",
+   "parent": 45
+  },
+  {
+   "name": "thumb.01.R.02",
+   "parent": 46
+  },
+  {
+   "name": "finger_index.01.R.02",
+   "parent": 47
+  },
+  {
+   "name": "finger_pinky.02.L",
+   "parent": 48
+  },
+  {
+   "name": "finger_index.02.L",
+   "parent": 49
+  },
+  {
+   "name": "thumb.02.L",
+   "parent": 50
+  },
+  {
+   "name": "finger_middle.02.L",
+   "parent": 51
+  },
+  {
+   "name": "finger_ring.02.L",
+   "parent": 52
+  },
+  {
+   "name": "finger_pinky.02.R",
+   "parent": 53
+  },
+  {
+   "name": "finger_ring.02.R",
+   "parent": 54
+  },
+  {
+   "name": "finger_middle.02.R",
+   "parent": 55
+  },
+  {
+   "name": "thumb.02.R",
+   "parent": 56
+  },
+  {
+   "name": "finger_index.02.R",
+   "parent": 57
+  },
+  {
+   "name": "finger_pinky.03.L",
+   "parent": 58
+  },
+  {
+   "name": "finger_index.03.L",
+   "parent": 59
+  },
+  {
+   "name": "thumb.03.L",
+   "parent": 60
+  },
+  {
+   "name": "finger_middle.03.L",
+   "parent": 61
+  },
+  {
+   "name": "finger_ring.03.L",
+   "parent": 62
+  },
+  {
+   "name": "finger_pinky.03.R",
+   "parent": 63
+  },
+  {
+   "name": "finger_ring.03.R",
+   "parent": 64
+  },
+  {
+   "name": "finger_middle.03.R",
+   "parent": 65
+  },
+  {
+   "name": "thumb.03.R",
+   "parent": 66
+  },
+  {
+   "name": "finger_index.03.R",
+   "parent": 67
+  }
+ ],
+ "bindLocal": 1048048,
+ "inverseBind": 1051168,
+ "upperBody": [
+  4,
+  7,
+  8,
+  9,
+  12,
+  13,
+  14,
+  17,
+  18,
+  19,
+  22,
+  23,
+  26,
+  27,
+  28,
+  29,
+  30,
+  31,
+  32,
+  33,
+  34,
+  35,
+  36,
+  37,
+  38,
+  39,
+  40,
+  41,
+  42,
+  43,
+  44,
+  45,
+  46,
+  47,
+  48,
+  49,
+  50,
+  51,
+  52,
+  53,
+  54,
+  55,
+  56,
+  57,
+  58,
+  59,
+  60,
+  61,
+  62,
+  63,
+  64,
+  65,
+  66,
+  67,
+  68,
+  69,
+  70,
+  71,
+  72,
+  73,
+  74,
+  75,
+  76,
+  77
+ ],
+ "mesh": {
+  "vertexCount": 3110,
+  "position": 0,
+  "normal": 37328,
+  "uv": 74656,
+  "joints": 99536,
+  "weights": 111984,
+  "indexType": "uint16",
+  "index": 124432,
+  "indexCount": 15018,
+  "boundsMin": [
+   -0.7683277257772017,
+   -0.2557918643413677,
+   -0.0002953848000356163
+  ],
+  "boundsMax": [
+   0.7683277217747364,
+   0.1461461232925461,
+   1.7797046151999645
+  ]
+ },
+ "clips": {
+  "idle": {
+   "fps": 10,
+   "frames": 20,
+   "loop": true,
+   "offset": 154480
+  },
+  "walk": {
+   "fps": 30,
+   "frames": 20,
+   "loop": true,
+   "offset": 204400
+  },
+  "walk_back": {
+   "fps": 30,
+   "frames": 20,
+   "loop": true,
+   "offset": 254320
+  },
+  "walk_left": {
+   "fps": 35,
+   "frames": 20,
+   "loop": true,
+   "offset": 304240
+  },
+  "walk_right": {
+   "fps": 35,
+   "frames": 20,
+   "loop": true,
+   "offset": 354160
+  },
+  "run": {
+   "fps": 40,
+   "frames": 20,
+   "loop": true,
+   "offset": 404080
+  },
+  "run_back": {
+   "fps": 40,
+   "frames": 20,
+   "loop": true,
+   "offset": 454000
+  },
+  "run_left": {
+   "fps": 45,
+   "frames": 20,
+   "loop": true,
+   "offset": 503920
+  },
+  "run_right": {
+   "fps": 45,
+   "frames": 20,
+   "loop": true,
+   "offset": 553840
+  },
+  "jump": {
+   "fps": 50,
+   "frames": 11,
+   "loop": false,
+   "offset": 603760
+  },
+  "crouch": {
+   "fps": 10,
+   "frames": 20,
+   "loop": true,
+   "offset": 631216
+  },
+  "crouch_walk": {
+   "fps": 30,
+   "frames": 20,
+   "loop": true,
+   "offset": 681136
+  },
+  "pain": {
+   "fps": 20,
+   "frames": 11,
+   "loop": false,
+   "offset": 731056
+  },
+  "dying": {
+   "fps": 21,
+   "frames": 21,
+   "loop": false,
+   "offset": 758512
+  },
+  "dead": {
+   "fps": 10,
+   "frames": 2,
+   "loop": true,
+   "offset": 810928
+  },
+  "rifle_idle": {
+   "fps": 1,
+   "frames": 2,
+   "loop": true,
+   "offset": 815920
+  },
+  "rifle_fire": {
+   "fps": 24,
+   "frames": 4,
+   "loop": false,
+   "offset": 820912
+  },
+  "rifle_reload": {
+   "fps": 5,
+   "frames": 9,
+   "loop": false,
+   "offset": 830896
+  },
+  "pistol_idle": {
+   "fps": 1,
+   "frames": 2,
+   "loop": true,
+   "offset": 853360
+  },
+  "pistol_fire": {
+   "fps": 20,
+   "frames": 4,
+   "loop": false,
+   "offset": 858352
+  },
+  "pistol_reload": {
+   "fps": 20,
+   "frames": 22,
+   "loop": false,
+   "offset": 868336
+  },
+  "smg_reload": {
+   "fps": 19.45,
+   "frames": 45,
+   "loop": false,
+   "offset": 923248
+  },
+  "shotgun_fire": {
+   "fps": 15,
+   "frames": 5,
+   "loop": false,
+   "offset": 1035568
+  }
+ },
+ "sockets": {
+  "weapon": {
+   "joint": "hand.R",
+   "offset": [
+    0.010269037056951745,
+    -0.0924213335125657,
+    0.010269037056951745
+   ],
+   "rotation": [
+    -90,
+    0,
+    -90
+   ]
+  },
+  "head": {
+   "joint": "head",
+   "offset": [
+    0,
+    -0.06674874087018634,
+    0.051345185284758725
+   ],
+   "radius": 0.15
+  }
+ },
+ "textures": {
+  "normal": "../re_soldier_skin/normal.png",
+  "orm": "../re_soldier_skin/orm.png"
+ },
+ "variants": {
+  "urban": {
+   "base": "../re_soldier_skin/urban_base.png",
+   "emit": "../re_soldier_skin/urban_emit.png"
+  },
+  "desert": {
+   "base": "../re_soldier_skin/desert_base.png",
+   "emit": "../re_soldier_skin/desert_emit.png"
+  },
+  "forest": {
+   "base": "../re_soldier_skin/forest_base.png",
+   "emit": "../re_soldier_skin/forest_emit.png"
+  },
+  "blackops": {
+   "base": "../re_soldier_skin/blackops_base.png",
+   "emit": "../re_soldier_skin/blackops_emit.png"
+  },
+  "crimson": {
+   "base": "../re_soldier_skin/crimson_base.png",
+   "emit": "../re_soldier_skin/crimson_emit.png"
+  },
+  "arctic": {
+   "base": "../re_soldier_skin/arctic_base.png",
+   "emit": "../re_soldier_skin/arctic_emit.png"
+  },
+  "navy": {
+   "base": "../re_soldier_skin/navy_base.png",
+   "emit": "../re_soldier_skin/navy_emit.png"
+  },
+  "olive": {
+   "base": "../re_soldier_skin/olive_base.png",
+   "emit": "../re_soldier_skin/olive_emit.png"
+  }
+ },
+ "height": 1.78,
+ "scale": 0.10269037056951745
+}

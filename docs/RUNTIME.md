@@ -29,11 +29,20 @@ Chrome, Edge, Firefox, Safari, Android WebView va iOS WKWebView'da. Runtime bitt
 - Suv materiali (nomida `water`/`suv`/`lake`...): animatsiyali to'lqin, Fresnel shaffoflik, osmon aksi.
 - Instanced o't (yashil, yuqoriga qaragan statik yerda avtomatik; shamol, quyosh nuri o'tishi, soyalar; sifatga qarab 14k–64k o't bargi, 8 m bo'laklar bilan culling).
 - Bulutli prosedural osmon, god rays (quyosh nurlari), ko'zning yorug'likka moslashuvi (auto exposure), FXAA + sharpen.
+- **Kino darajasidagi realtime**: TAA + temporal upscaling (o'yin 70–80 % rezolyutsiyada render qilinib, to'liq ekranga sifatli kattalashtiriladi — oddiy kompyuterda ham silliq), ekran-fazoli aks ettirishlar (SSR), quyosh soyasi tushadigan hajmli yorug'lik (volumetric fog), kontakt soyalar, avtomatik ekspozitsiya.
+- **VFX**: o'q izlari (tracer), og'iz olovi va yorug'ligi, uchqunlar, chang, qon, gilzalar, tutun, devordagi o'q teshiklari (decal), kamera silkinishi.
 - 16 tagacha point/spot yorug'lik (kameraga eng ta'sirlisi tanlanadi).
 - Prosedural osmon (quyosh balandligiga qarab kun/shom ranglari, quyosh diski) yoki World rangi.
 - Osmondan ambient va split-sum yaqinlashuvidagi aks ettirishlar, balandlik bilan susayuvchi tuman.
 - HDR pipeline: bloom, SSAO, ACES tone mapping, vinyetka, FXAA.
 - Real-time optimizatsiyalar: frustum culling, ekranda 1 pikseldan kichik obyektlarni o'tkazib yuborish, material bo'yicha saralash, bir xil geometriya eksportda bitta mesh'ga birlashtiriladi va **GPU instancing** bilan bitta draw call'da chiziladi (sahna va soya pass'larida), soyada mayda obyektlar tashlab yuboriladi, uzoq soya kaskadi kamroq yangilanadi, dinamik resolution (FPS tushsa avtomatik pasayadi).
+
+**Animatsiyali qahramonlar** (`assets/characters`, `characters.py`)
+- GPU skinning (suyak matritsalari float teksturada), qatlamli animatsiya: oyoqlar harakatni (yurish/yugurish/yon qadam/orqaga), tana qurolni (nishon, otish, qayta o'qlash) o'ynaydi; nishonga qarab egilish, o'lish animatsiyasi.
+- Qurol ikki qo'lga avtomatik moslanadi; boshga tegish (headshot) uchun alohida hitbox.
+- Blender'da: **Create → Add Character** (Soldier / Female) — rang varianti (`be_variant`) va qurol (`be_weapon`: rifle, smg, shotgun, pistol).
+- Dushman askarlar: masofani ushlaydi, yonga qadam tashlaydi, seriya bilan otadi, qayta o'qlaydi, sheriklarini ogohlantiradi.
+- Modellar: Red Eclipse 1.6 (CC-BY-SA 3.0) — `assets/characters/LICENSE-CC-BY-SA-3.0.txt`.
 
 **Fizika**
 - Statik dunyo uchburchaklari fazoviy hash'da (katta shaharlar uchun ham tez).

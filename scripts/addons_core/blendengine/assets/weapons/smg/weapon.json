@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineWeapon",
+ "version": 1,
+ "id": "smg",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team (redeclipse.net)",
+ "source": "Red Eclipse 1.6 weapons/smg/smg.md5mesh",
+ "mesh": {
+  "vertexCount": 955,
+  "position": 0,
+  "normal": 11472,
+  "uv": 22944,
+  "indexType": "uint16",
+  "index": 30592,
+  "indexCount": 3756,
+  "boundsMin": [
+   -0.03760278779838756,
+   -0.27758932897790956,
+   -0.22142311009826457
+  ],
+  "boundsMax": [
+   0.06986142497014264,
+   0.38241067102209053,
+   0.19768499525524005
+  ]
+ },
+ "muzzle": [
+  0.0,
+  0.38014601418258265,
+  0.12884948990544653
+ ],
+ "length": 0.66,
+ "textures": {
+  "base": "base.png",
+  "normal": "normal.png",
+  "orm": "orm.png",
+  "emit": "emit.png"
+ }
+}

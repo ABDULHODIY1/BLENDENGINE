@@ -326,6 +326,15 @@ def _draw_smart_viewport(layout, scene):
 
 
 def _draw_component_tools(layout):
+    layout.label(text="Add Character", icon="ARMATURE_DATA")
+    row = layout.row(align=True)
+    row.scale_y = 1.3
+    op = row.operator("blendengine.add_character", text="Soldier", icon="OUTLINER_OB_ARMATURE")
+    op.character = "re_soldier_male"
+    op.weapon = "rifle"
+    op = row.operator("blendengine.add_character", text="Female", icon="OUTLINER_OB_ARMATURE")
+    op.character = "re_soldier_female"
+    op.weapon = "smg"
     layout.label(text="Add Component", icon="ADD")
     grid = _grid(layout, 2)
     grid.operator("blendengine.add_player_controller", text="Player", icon="OUTLINER_OB_ARMATURE")

@@ -215,11 +215,31 @@ float fbm(vec3 p) {
 }
 `;
 
+  // GPU skinning: bone matrices live in a float texture, one row per character.
+  const SKIN_GLSL = `
+#ifdef SKINNED
+layout(location = 7) in vec4 aJoints;
+layout(location = 8) in vec4 aWeights;
+uniform highp sampler2D uBones;
+uniform int uBoneRow;
+mat4 boneMatrix(float j) {
+  int x = int(j) * 4;
+  return mat4(texelFetch(uBones, ivec2(x, uBoneRow), 0), texelFetch(uBones, ivec2(x + 1, uBoneRow), 0),
+              texelFetch(uBones, ivec2(x + 2, uBoneRow), 0), texelFetch(uBones, ivec2(x + 3, uBoneRow), 0));
+}
+mat4 skinMatrix() {
+  return boneMatrix(aJoints.x) * aWeights.x + boneMatrix(aJoints.y) * aWeights.y
+       + boneMatrix(aJoints.z) * aWeights.z + boneMatrix(aJoints.w) * aWeights.w;
+}
+#endif
+`;
+
   const PBR_VS = `#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in mat4 aInstance;
+${SKIN_GLSL}
 uniform mat4 uModel;
 uniform mat4 uViewProj;
 uniform mat4 uShadowMat0;
@@ -235,6 +255,10 @@ out vec4 vShadow1;
 void main() {
   mat4 model = uInstanced > 0.5 ? aInstance : uModel;
   mat3 nmat = uInstanced > 0.5 ? transpose(inverse(mat3(model))) : uNormalMat;
+#ifdef SKINNED
+  model = model * skinMatrix();
+  nmat = mat3(model);
+#endif
   vec4 w = model * vec4(aPos, 1.0);
   vWorld = w.xyz;
   vNormal = normalize(nmat * aNormal);
@@ -362,6 +386,8 @@ float shadowFactor() {
   return mix(far, near, smoothstep(0.0, 0.12, e0));
 }
 
+float fog_amount(float d) { return uFogDensity > 0.0 ? 1.0 - exp(-uFogDensity * d) : 0.0; }
+
 void main() {
   vec4 base = uBaseColor;
   if (uTexFlags.x == 1) base *= texture(uBaseTex, vUV);
@@ -442,7 +468,8 @@ void main() {
     color = mix(color, fogColor, fog);
   }
 
-  float alpha = uBlend > 0.5 ? base.a : 1.0;
+  // Opaque surfaces write their mirror reflectivity to alpha (read by the SSR pass).
+  float alpha = uBlend > 0.5 ? base.a : (F0.r + (1.0 - F0.r) * pow(1.0 - NoV, 5.0)) * (1.0 - smoothstep(0.08, 0.45, rough)) * (1.0 - fog_amount(dist));
   if (uWater > 0.5) {
     // Water: transparency drops at grazing angles where the sky reflection dominates.
     float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
@@ -455,10 +482,17 @@ void main() {
   const DEPTH_VS = `#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 3) in mat4 aInstance;
+${SKIN_GLSL}
 uniform mat4 uModel;
 uniform mat4 uViewProj;
 uniform float uInstanced;
-void main() { gl_Position = uViewProj * (uInstanced > 0.5 ? aInstance : uModel) * vec4(aPos, 1.0); }`;
+void main() {
+  mat4 model = uInstanced > 0.5 ? aInstance : uModel;
+#ifdef SKINNED
+  model = model * skinMatrix();
+#endif
+  gl_Position = uViewProj * model * vec4(aPos, 1.0);
+}`;
 
   const DEPTH_FS = `#version 300 es
 precision mediump float;
@@ -514,7 +548,7 @@ void main() {
     }
   }
   if (uDirect > 0.5) col = toSRGB(toneMap(col * uExposure));
-  outColor = vec4(col, 1.0);
+  outColor = vec4(col, 0.0);
 }`;
 
   const BRIGHT_FS = `#version 300 es
@@ -579,6 +613,8 @@ uniform mat4 uInvProj;
 uniform vec2 uTexel;
 uniform vec3 uKernel[12];
 uniform float uRadius;
+uniform vec3 uSunView;
+uniform float uContact;
 out vec4 o;
 vec3 viewPos(vec2 uv) {
   float d = texture(uDepth, uv).r;
@@ -610,7 +646,24 @@ void main() {
     float range = smoothstep(0.0, 1.0, uRadius / max(abs(P.z - sz), 1e-4));
     occ += (sz >= s.z + 0.03 ? 1.0 : 0.0) * range;
   }
-  o = vec4(vec3(1.0 - occ / 12.0), 1.0);
+  float ao = 1.0 - occ / 12.0;
+  // Contact shadows: a short screen-space march towards the sun catches small occluders
+  // (feet on the ground, crates on grass) that the shadow map is too coarse for.
+  if (uContact > 0.0) {
+    float shadow = 0.0;
+    vec3 q = P + N * 0.02;
+    for (int i = 1; i <= 10; i++) {
+      q += uSunView * (0.035 + 0.01 * noise);
+      vec4 c = uProj * vec4(q, 1.0);
+      vec2 cuv = c.xy / c.w * 0.5 + 0.5;
+      if (cuv.x < 0.0 || cuv.x > 1.0 || cuv.y < 0.0 || cuv.y > 1.0) break;
+      float sz = viewPos(cuv).z;
+      float diff = sz - q.z;
+      if (diff > 0.015 && diff < 0.35) { shadow = 1.0 - float(i) / 11.0; break; }
+    }
+    ao *= 1.0 - shadow * uContact;
+  }
+  o = vec4(vec3(ao), 1.0);
 }`;
 
   const BLUR_FS = `#version 300 es
@@ -689,7 +742,7 @@ void main() {
   float ao = texture(uAO, vUV).r;
   c *= mix(1.0, ao, uAOStrength);
   c += texture(uBloom, vUV).rgb * uBloomStrength;
-  c += texture(uRays, vUV).r * uRaysColor;
+  c += texture(uRays, vUV).rgb * uRaysColor;
   float auto = 1.0;
   if (uAutoExposure > 0.0) {
     float avg = exp(texture(uLum, vec2(0.5)).r);
@@ -761,6 +814,175 @@ void main() {
   o = vec4(c, 1.0);
 }`;
 
+
+  // Temporal anti-aliasing with upscaling: jittered low-resolution frames are accumulated
+  // into a full-resolution history (reprojected with the camera, clipped to the current
+  // neighbourhood in YCoCg). Lets ordinary GPUs render at 60-75 % and still look sharp.
+  const TAA_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uCurrent;
+uniform sampler2D uHistory;
+uniform sampler2D uDepth;
+uniform mat4 uReproject;
+uniform vec2 uJitter;
+uniform vec2 uTexel;
+uniform vec2 uHistTexel;
+uniform float uReset;
+uniform float uFeedback;
+out vec4 o;
+vec3 toY(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
+vec3 fromY(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+vec3 tm(vec3 c) { return c / (1.0 + max(c.r, max(c.g, c.b))); }
+vec3 itm(vec3 c) { return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-3); }
+vec3 history(vec2 uv) {
+  // Catmull-Rom in 5 bilinear taps keeps the history sharp.
+  vec2 pos = uv / uHistTexel, c = floor(pos - 0.5) + 0.5, f = pos - c;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f), w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2, tc12 = (c + w2 / w12) * uHistTexel, tc0 = (c - 1.0) * uHistTexel, tc3 = (c + 2.0) * uHistTexel;
+  vec3 r = texture(uHistory, vec2(tc12.x, tc0.y)).rgb * (w12.x * w0.y) + texture(uHistory, vec2(tc0.x, tc12.y)).rgb * (w0.x * w12.y)
+         + texture(uHistory, tc12).rgb * (w12.x * w12.y) + texture(uHistory, vec2(tc3.x, tc12.y)).rgb * (w3.x * w12.y)
+         + texture(uHistory, vec2(tc12.x, tc3.y)).rgb * (w12.x * w3.y);
+  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+  return max(r / ws, 0.0);
+}
+void main() {
+  vec2 uv = vUV + uJitter;
+  vec3 m1 = vec3(0.0), m2 = vec3(0.0), cur = vec3(0.0);
+  float closest = 1.0;
+  vec2 closestOff = vec2(0.0);
+  for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++) {
+      vec2 off = vec2(x, y) * uTexel;
+      vec3 c = toY(tm(texture(uCurrent, uv + off).rgb));
+      if (x == 0 && y == 0) cur = c;
+      m1 += c; m2 += c * c;
+      float d = texture(uDepth, uv + off).r;
+      if (d < closest) { closest = d; closestOff = off; }
+    }
+  vec3 mean = m1 / 9.0, sigma = sqrt(max(m2 / 9.0 - mean * mean, 0.0));
+  vec4 prev = uReproject * vec4(vUV * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
+  vec2 puv = prev.xy / prev.w * 0.5 + 0.5;
+  if (uReset > 0.5 || puv.x < 0.0 || puv.x > 1.0 || puv.y < 0.0 || puv.y > 1.0) { o = vec4(itm(fromY(cur)), 1.0); return; }
+  vec3 h = toY(tm(history(puv)));
+  // Variance clipping towards the neighbourhood mean removes ghosting from moving characters.
+  vec3 lo = mean - sigma * 1.25, hi = mean + sigma * 1.25;
+  vec3 center = 0.5 * (lo + hi), ext = 0.5 * (hi - lo) + 1e-4;
+  vec3 v = h - center, a = abs(v / ext);
+  float mx = max(a.x, max(a.y, a.z));
+  if (mx > 1.0) h = center + v / mx;
+  float motion = length((puv - vUV) / uHistTexel);
+  float fb = mix(uFeedback, 0.8, clamp(motion / 12.0, 0.0, 1.0));
+  o = vec4(itm(fromY(mix(cur, h, fb))), 1.0);
+}`;
+
+  // Screen-space reflections for glossy surfaces (reflectivity comes from the scene alpha).
+  const SSR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uScene;
+uniform sampler2D uDepth;
+uniform mat4 uProj;
+uniform mat4 uInvProj;
+uniform vec2 uTexel;
+uniform float uIntensity;
+out vec4 o;
+vec3 viewPos(vec2 uv) {
+  float d = texture(uDepth, uv).r;
+  vec4 p = uInvProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  return p.xyz / p.w;
+}
+void main() {
+  vec4 c = texture(uScene, vUV);
+  float d = texture(uDepth, vUV).r;
+  if (c.a < 0.03 || d >= 1.0) { o = vec4(c.rgb, 1.0); return; }
+  vec3 P = viewPos(vUV);
+  vec3 pl = viewPos(vUV - vec2(uTexel.x, 0.0)), pr = viewPos(vUV + vec2(uTexel.x, 0.0));
+  vec3 pd = viewPos(vUV - vec2(0.0, uTexel.y)), pu = viewPos(vUV + vec2(0.0, uTexel.y));
+  vec3 dx = abs(pr.z - P.z) < abs(P.z - pl.z) ? pr - P : P - pl;
+  vec3 dy = abs(pu.z - P.z) < abs(P.z - pd.z) ? pu - P : P - pd;
+  vec3 N = normalize(cross(dx, dy));
+  vec3 V = normalize(P);
+  vec3 R = reflect(V, N);
+  if (R.z > 0.6) { o = vec4(c.rgb, 1.0); return; }
+  float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  float t = 0.05 + noise * 0.1, stepLen = 0.12;
+  vec2 hitUV = vec2(-1.0);
+  float lastT = 0.0;
+  for (int i = 0; i < 28; i++) {
+    vec3 q = P + R * t;
+    vec4 cl = uProj * vec4(q, 1.0);
+    vec2 uv = cl.xy / cl.w * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || cl.w <= 0.0) break;
+    float sz = viewPos(uv).z;
+    float diff = sz - q.z;
+    if (diff > 0.0 && diff < 0.25 + t * 0.06) {
+      float a = lastT, b = t;
+      for (int k = 0; k < 5; k++) {
+        float m = 0.5 * (a + b);
+        vec3 qm = P + R * m;
+        vec4 cm = uProj * vec4(qm, 1.0);
+        vec2 um = cm.xy / cm.w * 0.5 + 0.5;
+        if (viewPos(um).z - qm.z > 0.0) b = m; else a = m;
+        hitUV = um;
+      }
+      break;
+    }
+    lastT = t;
+    t += stepLen;
+    stepLen *= 1.18;
+  }
+  vec3 col = c.rgb;
+  if (hitUV.x >= 0.0) {
+    vec2 e = smoothstep(0.0, 0.12, hitUV) * smoothstep(0.0, 0.12, 1.0 - hitUV);
+    float fade = e.x * e.y * (1.0 - smoothstep(0.2, 0.6, R.z)) * (1.0 - smoothstep(12.0, 30.0, t));
+    vec3 refl = texture(uScene, hitUV).rgb;
+    col += (refl - col * 0.35) * c.a * fade * uIntensity;
+  }
+  o = vec4(max(col, 0.0), 1.0);
+}`;
+
+  // Volumetric sun light: ray march through height fog, shadowed by the wide cascade.
+  const VOLUME_FS = `#version 300 es
+precision highp float;
+precision highp sampler2DShadow;
+in vec2 vUV;
+uniform sampler2D uDepth;
+uniform sampler2DShadow uShadowMap1;
+uniform mat4 uShadowMat1;
+uniform mat4 uInvViewProj;
+uniform vec3 uCamPos;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform float uDensity;
+uniform float uMaxDist;
+out vec4 o;
+void main() {
+  float d = texture(uDepth, vUV).r;
+  vec4 wp = uInvViewProj * vec4(vUV * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  vec3 P = wp.xyz / wp.w;
+  vec3 ray = P - uCamPos;
+  float len = min(length(ray), uMaxDist);
+  vec3 dir = normalize(ray);
+  float cosT = dot(dir, uSunDir);
+  float g = 0.55;
+  float phase = (1.0 - g * g) / (4.0 * 3.14159 * pow(1.0 + g * g - 2.0 * g * cosT, 1.5)) + 0.05;
+  float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  const int STEPS = 20;
+  float stepLen = len / float(STEPS);
+  vec3 acc = vec3(0.0);
+  float trans = 1.0;
+  for (int i = 0; i < STEPS; i++) {
+    vec3 q = uCamPos + dir * (float(i) + noise) * stepLen;
+    float density = uDensity * exp(-max(q.z, 0.0) * 0.12);
+    vec4 sp = uShadowMat1 * vec4(q, 1.0);
+    vec3 s = sp.xyz / sp.w * 0.5 + 0.5;
+    float lit = (s.x > 0.0 && s.x < 1.0 && s.y > 0.0 && s.y < 1.0 && s.z < 1.0) ? texture(uShadowMap1, s) : 1.0;
+    acc += trans * density * stepLen * lit * phase;
+    trans *= exp(-density * stepLen);
+  }
+  o = vec4(acc * uSunColor, 1.0);
+}`;
 
   // Light shafts: radial blur of bright sky pixels toward the sun (half resolution).
   const GODRAYS_FS = `#version 300 es
@@ -891,7 +1113,36 @@ void main() {
   vec3 color = albedo * (uSunColor * sh * (diffuse + translucency) / 3.14159 + irradiance * (0.45 + 0.55 * vT));
   float dist = length(uCamPos - vWorld);
   if (uFogDensity > 0.0) color = mix(color, uFogColor, 1.0 - exp(-uFogDensity * dist));
-  outColor = vec4(color, 1.0);
+  outColor = vec4(color, 0.0);
+}`;
+
+  // Particles, muzzle flashes and tracers: camera-facing quads, premultiplied alpha (rgb may exceed 1 for HDR glow).
+  const FX_VS = `#version 300 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUV;
+layout(location = 2) in vec4 aColor;
+layout(location = 3) in float aShape;
+uniform mat4 uViewProj;
+out vec2 vUV;
+out vec4 vColor;
+out float vShape;
+void main() { vUV = aUV; vColor = aColor; vShape = aShape; gl_Position = uViewProj * vec4(aPos, 1.0); }`;
+
+  const FX_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+in vec4 vColor;
+in float vShape;
+uniform float uExposure;
+out vec4 o;
+void main() {
+  vec2 c = vUV * 2.0 - 1.0;
+  float a;
+  if (vShape < 0.5) a = exp(-dot(c, c) * 3.2);
+  else if (vShape < 1.5) a = (1.0 - c.y * c.y) * smoothstep(1.0, 0.6, abs(c.x));
+  else if (vShape < 2.5) { float r = length(c); a = smoothstep(1.0, 0.25, r) * (0.75 + 0.25 * sin(atan(c.y, c.x) * 5.0 + vColor.a * 9.0)); }
+  else { float r = length(c); a = smoothstep(1.0, 0.0, r) * smoothstep(0.0, 0.25, r) + exp(-r * r * 30.0); }
+  o = vec4(vColor.rgb * a, (vShape > 1.5 && vShape < 2.5) ? a * clamp(vColor.a, 0.0, 1.0) : 0.0);
 }`;
 
   const FXAA_FS = `#version 300 es
@@ -900,6 +1151,7 @@ in vec2 vUV;
 uniform sampler2D uSrc;
 uniform vec2 uTexel;
 uniform float uSharpen;
+uniform float uAA;
 out vec4 o;
 void main() {
   vec3 rgbNW = texture(uSrc, vUV + vec2(-1.0, -1.0) * uTexel).rgb;
@@ -919,6 +1171,7 @@ void main() {
   vec3 b = a * 0.5 + 0.25 * (texture(uSrc, vUV - dir * 0.5).rgb + texture(uSrc, vUV + dir * 0.5).rgb);
   float lB = dot(b, luma);
   vec3 c = (lB < lMin || lB > lMax) ? a : b;
+  if (uAA < 0.5) c = rgbM;
   // Light sharpening (unsharp mask) restores detail softened by FXAA and upscaling.
   vec3 blur = (rgbNW + rgbNE + rgbSW + rgbSE) * 0.25;
   c = clamp(c + (c - blur) * uSharpen, 0.0, 1.0);
@@ -934,9 +1187,11 @@ void main() {
   };
 
   class Program {
-    constructor(gl, vs, fs, name) {
+    constructor(gl, vs, fs, name, defines) {
       this.gl = gl;
       const compile = (type, src) => {
+        // Defines go right after the #version line.
+        if (defines) src = src.replace(/^(#version[^\n]*\n)/, '$1' + defines.map((d) => '#define ' + d + '\n').join(''));
         const s = gl.createShader(type);
         gl.shaderSource(s, src);
         gl.compileShader(s);
@@ -1024,6 +1279,30 @@ void main() {
       this.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
       this.pbr = new Program(gl, PBR_VS, PBR_FS, 'pbr');
       this.depthProg = new Program(gl, DEPTH_VS, DEPTH_FS, 'depth');
+      this.pbrSkin = new Program(gl, PBR_VS, PBR_FS, 'pbr-skinned', ['SKINNED']);
+      this.depthSkin = new Program(gl, DEPTH_VS, DEPTH_FS, 'depth-skinned', ['SKINNED']);
+      this.fxProg = new Program(gl, FX_VS, FX_FS, 'fx');
+      this.fxData = new Float32Array(4096 * 6 * 10);
+      this.fxBuffer = gl.createBuffer();
+      this.fxVao = gl.createVertexArray();
+      gl.bindVertexArray(this.fxVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.fxBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, this.fxData.byteLength, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 40, 12);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 40, 20);
+      gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 40, 36);
+      gl.bindVertexArray(null);
+      // Bone palette texture: 4 RGBA32F texels (one mat4) per joint, one row per skinned character.
+      this.boneCols = 128 * 4;
+      this.boneRows = 64;
+      this.boneData = new Float32Array(this.boneCols * this.boneRows * 4);
+      this.boneTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, this.boneCols, this.boneRows);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      this.boneRowsUsed = 0;
       this.sky = new Program(gl, FULLSCREEN_VS, SKY_FS, 'sky');
       if (this.hdr) {
         this.bright = new Program(gl, FULLSCREEN_VS, BRIGHT_FS, 'bright');
@@ -1037,6 +1316,10 @@ void main() {
         this.copy = new Program(gl, FULLSCREEN_VS, COPY_FS, 'copy');
         this.godrays = new Program(gl, FULLSCREEN_VS, GODRAYS_FS, 'godrays');
         this.lum = new Program(gl, FULLSCREEN_VS, LUM_FS, 'lum');
+        this.taa = new Program(gl, FULLSCREEN_VS, TAA_FS, 'taa');
+        this.ssr = new Program(gl, FULLSCREEN_VS, SSR_FS, 'ssr');
+        this.volume = new Program(gl, FULLSCREEN_VS, VOLUME_FS, 'volume');
+        this.blurRgb = new Program(gl, FULLSCREEN_VS, BLUR_FS.replace('.r;', '.rgb;').replace('float s = 0.0;', 'vec3 s = vec3(0.0);').replace('vec4(vec3(s / 16.0), 1.0)', 'vec4(s / 16.0, 1.0)'), 'blur-rgb');
       }
       this.grassProg = new Program(gl, GRASS_VS, GRASS_FS, 'grass');
       // One shared per-instance matrix buffer, wired into every mesh VAO (locations 3-6).
@@ -1128,6 +1411,34 @@ void main() {
       return { vao, indexType: mesh.indexType === 'uint16' ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT, indexSize: mesh.indexType === 'uint16' ? 2 : 4 };
     }
 
+    uploadSkinnedMesh(mesh, buffer) {
+      const gl = this.gl;
+      const gpu = this.uploadMesh(mesh, buffer);
+      gl.bindVertexArray(gpu.vao);
+      const attrib = (loc, offset, normalized) => {
+        const b = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, b);
+        gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(buffer, offset, mesh.vertexCount * 4), gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, normalized, 0, 0);
+      };
+      attrib(7, mesh.joints, false);
+      attrib(8, mesh.weights, true);
+      gl.bindVertexArray(null);
+      return gpu;
+    }
+
+    // Uploads the bone palettes of this frame's characters (rows of 4 texels per joint).
+    uploadBones(rows) {
+      const gl = this.gl;
+      const n = Math.min(rows.length, this.boneRows);
+      if (!n) return;
+      const width = this.boneCols * 4;
+      for (let r = 0; r < n; r++) this.boneData.set(rows[r].subarray(0, Math.min(rows[r].length, width)), r * width);
+      gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.boneCols, n, gl.RGBA, gl.FLOAT, this.boneData, 0);
+    }
+
     resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cw = this.fixedSize ? this.fixedSize[0] : Math.max(1, Math.round(this.canvas.clientWidth * dpr));
@@ -1154,8 +1465,16 @@ void main() {
         final: new Target(gl, w, h, { color: gl.RGBA8 }),
         accum: new Target(gl, w, h, { color: gl.RGBA16F }),
         rays: new Target(gl, hw, hh, { color: gl.RGBA16F }),
+        raysBlur: new Target(gl, hw, hh, { color: gl.RGBA16F }),
+        ssr: new Target(gl, w, h, { color: gl.RGBA16F }),
         bloom,
       };
+      // Full-resolution history and output for temporal upscaling.
+      if (!this.taaTargets || this.taaTargets.w !== cw || this.taaTargets.h !== ch) {
+        if (this.taaTargets) for (const t of this.taaTargets.list) t.dispose();
+        const list = [new Target(gl, cw, ch, { color: gl.RGBA16F }), new Target(gl, cw, ch, { color: gl.RGBA16F }), new Target(gl, cw, ch, { color: gl.RGBA8 })];
+        this.taaTargets = { w: cw, h: ch, list, hist: [list[0], list[1]], ldr: list[2], index: 0, valid: false };
+      }
       if (!this.lumTargets) {
         this.lumTargets = [new Target(gl, 1, 1, { color: gl.RGBA16F }), new Target(gl, 1, 1, { color: gl.RGBA16F })];
         this.lumIndex = 0;
@@ -1178,6 +1497,16 @@ void main() {
       const direct = !this.hdr;
       M4.invert(this.view, frame.camera.world);
       M4.copy(this.proj, frame.camera.proj(w / h));
+      this.taaOn = !!(this.hdr && this.settings.taa !== false && !frame.accumulating && !(this.jitter[0] || this.jitter[1]));
+      this.viewProjNJ = M4.mul(this.viewProjNJ || M4.create(), this.proj, this.view);
+      this.taaJitter = [0, 0];
+      if (this.taaOn) {
+        const k = (this.taaFrame = ((this.taaFrame || 0) + 1) % 8) + 1;
+        const halton = (i, b) => { let f = 1, x = 0; while (i > 0) { f /= b; x += f * (i % b); i = Math.floor(i / b); } return x; };
+        const jx = halton(k, 2) - 0.5, jy = halton(k, 3) - 0.5;
+        this.taaJitter = [jx / w, jy / h];
+        if (this.proj[15] === 0) { this.proj[8] -= jx * 2 / w; this.proj[9] -= jy * 2 / h; } else { this.proj[12] += jx * 2 / w; this.proj[13] += jy * 2 / h; }
+      }
       if (this.jitter[0] || this.jitter[1]) {
         // Sub-pixel jitter for accumulated anti-aliasing (works for both projections).
         const jx = this.jitter[0] * 2 / w, jy = this.jitter[1] * 2 / h;
@@ -1216,31 +1545,13 @@ void main() {
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-      const p = this.pbr.use();
-      p.m4('uViewProj', this.viewProj);
-      p.m4('uShadowMat0', this.shadowMats[0]);
-      p.m4('uShadowMat1', this.shadowMats[1]);
-      const sw = this.shadows[0].w;
-      p.v2('uNormalBias', shadowOn ? this.cascadeRadii[0] / sw * 1.5 : 0, shadowOn ? this.cascadeRadii[1] / sw * 1.5 : 0);
-      p.v2('uShadowTexel', 1 / sw, 1 / sw);
-      p.f1('uTime', frame.time || 0);
-      p.f1('uInstanced', 0);
-      p.v3('uCamPos', frame.camera.pos);
-      p.v3('uSunDir', sun.dir);
-      p.v3('uSunColor', vScale(sun.color, sun.intensity));
-      p.f1('uShadowOn', shadowOn ? 1 : 0);
       const env = frame.env;
-      p.v3('uSkyZenith', env.zenith); p.v3('uSkyHorizon', env.horizon); p.v3('uSkyGround', env.ground);
-      p.f1('uAmbient', env.ambient);
-      p.v3('uFogColor', env.fogColor);
-      p.f1('uFogDensity', env.fogDensity);
-      p.f1('uDirect', direct ? 1 : 0);
-      p.f1('uExposure', env.exposure);
-      p.i1('uBaseTex', 0); p.i1('uNormalTex', 1); p.i1('uRoughTex', 2); p.i1('uEmitTex', 3); p.i1('uShadowMap0', 4); p.i1('uShadowMap1', 5);
-      this.bindShadowMaps();
-      this.uploadLights(p, frame.lights);
+      this.setFrameUniforms(this.pbrSkin.use(), frame, shadowOn, direct);
+      this.pbrSkin.i1('uBones', 6);
+      const p = this.pbr.use();
+      this.setFrameUniforms(p, frame, shadowOn, direct);
 
-      const opaque = [], transparent = [];
+      const opaque = [], transparent = [], skinned = [];
       st.culled = 0;
       for (const item of frame.items) {
         if (!sphereInFrustum(planes, item.center, item.radius)) continue;
@@ -1248,7 +1559,8 @@ void main() {
           const d = vDist(item.center, camPos);
           if (d > item.radius && (item.radius / d) * pxScale < 0.9) { st.culled++; continue; }
         }
-        if (item.material.blend) { item.sortKey = vDist(item.center, camPos); transparent.push(item); }
+        if (item.skin) skinned.push(item);
+        else if (item.material.blend) { item.sortKey = vDist(item.center, camPos); transparent.push(item); }
         else opaque.push(item);
       }
       opaque.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex || a.first - b.first);
@@ -1256,7 +1568,19 @@ void main() {
 
       gl.disable(gl.BLEND);
       this.drawBatched(p, opaque, true);
-
+      if (skinned.length) {
+        const k = this.pbrSkin.use();
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+        let lastMat = null;
+        for (const item of skinned) {
+          k.i1('uBoneRow', item.skin.row);
+          this.drawItem(k, item, lastMat);
+          lastMat = item.material;
+        }
+        p.use();
+      }
+      st.characters = skinned.length;
       if (this.grass && this.hdr && frame.grass !== false) this.drawGrass(frame, planes, shadowOn);
 
       // Sky fills untouched pixels at the far plane.
@@ -1281,15 +1605,95 @@ void main() {
       if (transparent.length) {
         p.use();
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ZERO);
         let lastMat = null;
         for (const item of transparent) { this.drawItem(p, item, lastMat); lastMat = item.material; }
         gl.disable(gl.BLEND);
       }
+      if (frame.fx && frame.fx.length) this.drawFx(frame.fx, camPos);
       gl.depthMask(true);
 
       if (!direct) this.postProcess(frame, w, h, output);
       M4.copy(this.prevViewProj, this.viewProj);
+      this.prevViewProjNJ = M4.copy(this.prevViewProjNJ || M4.create(), this.viewProjNJ);
+    }
+
+    // fx: [{shape, pos, size, color} | {shape: 1, from, to, width, color}], shapes: 0 glow, 1 streak, 2 smoke/blood, 3 ring flash.
+    drawFx(fx, camPos) {
+      const gl = this.gl, v = this.view;
+      const right = [v[0], v[4], v[8]], up = [v[1], v[5], v[9]];
+      const maxQuads = this.fxData.length / 60;
+      const d = this.fxData;
+      let q = 0;
+      const vert = (o, p, u, vv, c, shape) => { d[o] = p[0]; d[o + 1] = p[1]; d[o + 2] = p[2]; d[o + 3] = u; d[o + 4] = vv; d[o + 5] = c[0]; d[o + 6] = c[1]; d[o + 7] = c[2]; d[o + 8] = c[3]; d[o + 9] = shape; };
+      const quad = (a, b, c2, d2, color, shape) => {
+        const o = q * 60;
+        vert(o, a, 0, 0, color, shape); vert(o + 10, b, 1, 0, color, shape); vert(o + 20, c2, 1, 1, color, shape);
+        vert(o + 30, a, 0, 0, color, shape); vert(o + 40, c2, 1, 1, color, shape); vert(o + 50, d2, 0, 1, color, shape);
+        q++;
+      };
+      for (const f of fx) {
+        if (q >= maxQuads) break;
+        if (f.normal) {
+          // Surface-aligned quad (bullet holes, scorch marks), lifted slightly off the surface.
+          const n = f.normal, t0 = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1];
+          const x = vScale(vNorm(vCross(n, t0)), f.size), y = vScale(vNorm(vCross(n, vNorm(vCross(n, t0)))), f.size);
+          const p = vAdd(f.pos, vScale(n, 0.01));
+          quad(vSub(vSub(p, x), y), vSub(vAdd(p, x), y), vAdd(vAdd(p, x), y), vAdd(vSub(p, x), y), f.color, f.shape);
+        } else if (f.shape === 1) {
+          const dir = vSub(f.to, f.from), mid = vScale(vAdd(f.from, f.to), 0.5);
+          let side = vCross(dir, vSub(camPos, mid));
+          const l = vLen(side);
+          if (l < 1e-6) continue;
+          side = vScale(side, f.width * 0.5 / l);
+          quad(vSub(f.from, side), vSub(f.to, side), vAdd(f.to, side), vAdd(f.from, side), f.color, 1);
+        } else {
+          const r = vScale(right, f.size), u = vScale(up, f.size);
+          const p = f.pos;
+          quad(vSub(vSub(p, r), u), vSub(vAdd(p, r), u), vAdd(vAdd(p, r), u), vAdd(vSub(p, r), u), f.color, f.shape);
+        }
+      }
+      if (!q) return;
+      const f = this.fxProg.use();
+      f.m4('uViewProj', this.viewProj);
+      gl.bindVertexArray(this.fxVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.fxBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, d, 0, q * 60);
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.depthMask(false);
+      gl.disable(gl.CULL_FACE);
+      gl.drawArrays(gl.TRIANGLES, 0, q * 6);
+      gl.disable(gl.BLEND);
+      this.stats.draws++;
+      this.stats.fx = q;
+    }
+
+    setFrameUniforms(p, frame, shadowOn, direct) {
+      const sun = frame.sun;
+      p.m4('uViewProj', this.viewProj);
+      p.m4('uShadowMat0', this.shadowMats[0]);
+      p.m4('uShadowMat1', this.shadowMats[1]);
+      const sw = this.shadows[0].w;
+      p.v2('uNormalBias', shadowOn ? this.cascadeRadii[0] / sw * 1.5 : 0, shadowOn ? this.cascadeRadii[1] / sw * 1.5 : 0);
+      p.v2('uShadowTexel', 1 / sw, 1 / sw);
+      p.f1('uTime', frame.time || 0);
+      p.f1('uInstanced', 0);
+      p.v3('uCamPos', frame.camera.pos);
+      p.v3('uSunDir', sun.dir);
+      p.v3('uSunColor', vScale(sun.color, sun.intensity));
+      p.f1('uShadowOn', shadowOn ? 1 : 0);
+      const env = frame.env;
+      p.v3('uSkyZenith', env.zenith); p.v3('uSkyHorizon', env.horizon); p.v3('uSkyGround', env.ground);
+      p.f1('uAmbient', env.ambient);
+      p.v3('uFogColor', env.fogColor);
+      p.f1('uFogDensity', env.fogDensity);
+      p.f1('uDirect', direct ? 1 : 0);
+      p.f1('uExposure', env.exposure);
+      p.i1('uBaseTex', 0); p.i1('uNormalTex', 1); p.i1('uRoughTex', 2); p.i1('uEmitTex', 3); p.i1('uShadowMap0', 4); p.i1('uShadowMap1', 5);
+      this.bindShadowMaps();
+      this.uploadLights(p, frame.lights);
+
     }
 
     // Film accumulation: clear, add weighted sub-frames, then present with grain.
@@ -1456,7 +1860,22 @@ void main() {
         list.push(item);
       }
       list.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex || a.first - b.first);
-      this.drawBatched(p, list, false);
+      const statics = list.filter((it) => !it.skin), chars = list.filter((it) => it.skin);
+      this.drawBatched(p, statics, false);
+      if (chars.length) {
+        const k = this.depthSkin.use();
+        k.m4('uViewProj', mat);
+        k.f1('uInstanced', 0);
+        k.i1('uBones', 6);
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+        for (const it of chars) {
+          k.i1('uBoneRow', it.skin.row);
+          k.m4('uModel', it.world);
+          gl.bindVertexArray(it.gpu.vao);
+          gl.drawElements(gl.TRIANGLES, it.count, it.gpu.indexType, it.first * it.gpu.indexSize);
+        }
+      }
       gl.disable(gl.POLYGON_OFFSET_FILL);
     }
 
@@ -1549,6 +1968,9 @@ void main() {
         s.m4('uInvProj', this.invProj);
         s.v2('uTexel', 1 / w, 1 / h);
         s.f1('uRadius', 0.65);
+        const sv = M4.dir(this.view, frame.sun.dir);
+        s.v3('uSunView', vNorm(sv));
+        s.f1('uContact', st.contactShadows !== false && frame.sun.intensity > 0.01 ? 0.75 : 0);
         gl.uniform3fv(s.loc('uKernel'), this.kernel);
         this.fullscreen(s, T.ao);
         const b = this.blur.use();
@@ -1559,14 +1981,47 @@ void main() {
         aoTex = T.aoBlur.tex;
       }
 
+      // Screen-space reflections on glossy surfaces (render resolution).
+      let sceneTex = T.scene.tex, sw = w, sh = h;
+      if (st.ssr !== false) {
+        const r = this.ssr.use();
+        bind(0, T.scene.tex); bind(1, T.scene.depth);
+        r.i1('uScene', 0); r.i1('uDepth', 1);
+        r.m4('uProj', this.proj); r.m4('uInvProj', this.invProj);
+        r.v2('uTexel', 1 / w, 1 / h);
+        r.f1('uIntensity', 1.0);
+        this.fullscreen(r, T.ssr);
+        sceneTex = T.ssr.tex;
+      }
+
+      // Temporal anti-aliasing + upscaling to the output resolution.
+      if (this.taaOn) {
+        const TT = this.taaTargets;
+        const prev = TT.hist[TT.index], next = TT.hist[1 - TT.index];
+        const t = this.taa.use();
+        bind(0, sceneTex); bind(1, prev.tex); bind(2, T.scene.depth);
+        t.i1('uCurrent', 0); t.i1('uHistory', 1); t.i1('uDepth', 2);
+        const reproject = M4.mul(M4.create(), this.prevViewProjNJ || this.viewProjNJ, M4.invert(M4.create(), this.viewProjNJ));
+        t.m4('uReproject', reproject);
+        t.v2('uJitter', this.taaJitter[0], this.taaJitter[1]);
+        t.v2('uTexel', 1 / w, 1 / h);
+        t.v2('uHistTexel', 1 / TT.w, 1 / TT.h);
+        t.f1('uReset', !TT.valid || frame.resetHistory ? 1 : 0);
+        t.f1('uFeedback', 0.9);
+        this.fullscreen(t, next);
+        TT.index = 1 - TT.index;
+        TT.valid = true;
+        sceneTex = next.tex; sw = TT.w; sh = TT.h;
+      } else if (this.taaTargets) this.taaTargets.valid = false;
+
       // Bloom: threshold, downsample chain, additive upsample.
       let bloomTex = this.black;
       if (st.bloom > 0) {
         const chain = T.bloom;
         let prog = this.bright.use();
-        bind(0, T.scene.tex);
+        bind(0, sceneTex);
         prog.i1('uSrc', 0);
-        prog.v2('uTexel', 1 / w, 1 / h);
+        prog.v2('uTexel', 1 / sw, 1 / sh);
         prog.f1('uThreshold', 1.0);
         this.fullscreen(prog, chain[0]);
         prog = this.down.use();
@@ -1599,7 +2054,7 @@ void main() {
         const pxPerMetre = w / (lens.sensor / 1000);
         dofParams = [A * f / (S - f) * pxPerMetre, S, frame.camera.far, frame.camera.near];
         const d = this.dof.use();
-        bind(0, T.scene.tex); bind(1, T.scene.depth);
+        bind(0, sceneTex); bind(1, T.scene.depth);
         d.i1('uScene', 0); d.i1('uDepth', 1);
         d.v2('uTexel', 1 / w, 1 / h);
         d.v4('uDofParams', dofParams);
@@ -1610,7 +2065,28 @@ void main() {
       // Light shafts from the sun when it is in front of the camera.
       let raysTex = this.black, raysColor = [0, 0, 0];
       const sun = frame.sun;
-      if (st.godRays !== false && sun.intensity > 0.01 && sun.dir[2] > -0.05) {
+      if (st.volumetrics !== false && this.shadowOn && sun.intensity > 0.01 && frame.env.fogDensity > 0) {
+        // Volumetric light through height fog, shadowed by the far cascade, then blurred.
+        const v = this.volume.use();
+        bind(0, T.scene.depth);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.shadows[1].depth);
+        v.i1('uDepth', 0); v.i1('uShadowMap1', 1);
+        v.m4('uShadowMat1', this.shadowMats[1]);
+        v.m4('uInvViewProj', this.invViewProj);
+        v.v3('uCamPos', frame.camera.pos);
+        v.v3('uSunDir', sun.dir);
+        v.v3('uSunColor', vScale(sun.color, sun.intensity));
+        v.f1('uDensity', clamp(frame.env.fogDensity * 1.6, 0.002, 0.02) * (st.volumetricDensity || 1));
+        v.f1('uMaxDist', Math.min(80, this.shadowRadius * 1.6));
+        this.fullscreen(v, T.rays);
+        const bl = this.blurRgb.use();
+        bind(0, T.rays.tex);
+        bl.i1('uSrc', 0);
+        bl.v2('uTexel', 1 / T.rays.w, 1 / T.rays.h);
+        this.fullscreen(bl, T.raysBlur);
+        raysTex = T.raysBlur.tex;
+        raysColor = [1, 1, 1];
+      } else if (st.godRays !== false && sun.intensity > 0.01 && sun.dir[2] > -0.05) {
         const cp = frame.camera.pos;
         const sp = [cp[0] + sun.dir[0] * 1000, cp[1] + sun.dir[1] * 1000, cp[2] + sun.dir[2] * 1000];
         const vp = this.viewProj;
@@ -1623,7 +2099,7 @@ void main() {
           const fade = 1 - smoothstep(0.55, 1.1, edge);
           if (fade > 0.01) {
             const g = this.godrays.use();
-            bind(0, T.scene.tex); bind(1, T.scene.depth);
+            bind(0, sceneTex); bind(1, T.scene.depth);
             g.i1('uScene', 0); g.i1('uDepth', 1);
             g.v2('uSunUV', u, v);
             g.f1('uDensity', 0.85);
@@ -1641,7 +2117,7 @@ void main() {
       if (autoExposure > 0) {
         const prev = this.lumTargets[this.lumIndex], next = this.lumTargets[1 - this.lumIndex];
         const l = this.lum.use();
-        bind(0, T.scene.tex); bind(1, prev.tex);
+        bind(0, sceneTex); bind(1, prev.tex);
         l.i1('uScene', 0); l.i1('uPrev', 1);
         l.f1('uBlend', this.lumFresh || frame.resetHistory ? 1 : 0.04);
         this.fullscreen(l, next);
@@ -1650,9 +2126,9 @@ void main() {
         lumTex = next.tex;
       }
 
-      const useFxaa = st.antiAliasing !== 'OFF';
+      const useFxaa = st.antiAliasing !== 'OFF' || this.taaOn;
       const c = this.composite.use();
-      bind(0, T.scene.tex); bind(1, bloomTex); bind(2, aoTex); bind(3, T.scene.depth); bind(4, T.dof.tex); bind(5, raysTex); bind(6, lumTex);
+      bind(0, sceneTex); bind(1, bloomTex); bind(2, aoTex); bind(3, T.scene.depth); bind(4, T.dof.tex); bind(5, raysTex); bind(6, lumTex);
       c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2); c.i1('uDepth', 3); c.i1('uDof', 4); c.i1('uRays', 5); c.i1('uLum', 6);
       c.v3('uRaysColor', raysColor);
       c.f1('uAutoExposure', autoExposure);
@@ -1673,12 +2149,14 @@ void main() {
       c.f1('uVignette', film && film.vignette !== undefined ? film.vignette : 0.35);
       c.v3('uTint', frame.tint || [1, 1, 1]);
       if (useFxaa) {
-        this.fullscreen(c, T.ldr);
+        const ldr = this.taaOn ? this.taaTargets.ldr : T.ldr;
+        this.fullscreen(c, ldr);
         const f = this.fxaa.use();
-        bind(0, T.ldr.tex);
+        bind(0, ldr.tex);
         f.i1('uSrc', 0);
-        f.v2('uTexel', 1 / w, 1 / h);
-        f.f1('uSharpen', 0.22 + (1 - this.scale) * 0.8);
+        f.v2('uTexel', 1 / ldr.w, 1 / ldr.h);
+        f.f1('uAA', this.taaOn ? 0 : 1);
+        f.f1('uSharpen', this.taaOn ? 0.3 + (1 - this.scale) * 0.5 : 0.22 + (1 - this.scale) * 0.8);
         this.fullscreen(f, output || null, this.canvas.width, this.canvas.height);
       } else {
         this.fullscreen(c, output || null, this.canvas.width, this.canvas.height);
@@ -1878,6 +2356,7 @@ void main() {
     }
     tone(type, f0, f1, dur, gain) {
       if (!this.ctx) return;
+      gain *= this.gainScale === undefined ? 1 : this.gainScale;
       const t = this.ctx.currentTime, o = this.ctx.createOscillator(), g = this.ctx.createGain();
       o.type = type;
       o.frequency.setValueAtTime(f0, t);
@@ -1889,6 +2368,7 @@ void main() {
     }
     burst(dur, freq, gain) {
       if (!this.ctx) return;
+      gain *= this.gainScale === undefined ? 1 : this.gainScale;
       const t = this.ctx.currentTime, s = this.ctx.createBufferSource(), f = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
       s.buffer = this.noise;
       f.type = 'lowpass'; f.frequency.setValueAtTime(freq, t); f.frequency.exponentialRampToValueAtTime(200, t + dur);
@@ -1896,8 +2376,17 @@ void main() {
       s.connect(f); f.connect(g); g.connect(this.master);
       s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
     }
-    play(name) {
+    play(name, gain) {
+      this.gainScale = gain === undefined ? 1 : gain;
+      if (this.gainScale < 0.02) return;
       switch (name) {
+        case 'rifle': this.burst(0.16, 6500, 0.75); this.tone('square', 150, 45, 0.09, 0.22); break;
+        case 'smg': this.burst(0.09, 7500, 0.55); this.tone('square', 210, 70, 0.05, 0.14); break;
+        case 'shotgun': this.burst(0.42, 4200, 1.0); this.tone('sawtooth', 95, 35, 0.25, 0.35); break;
+        case 'pistol': this.burst(0.12, 5600, 0.6); this.tone('square', 260, 80, 0.07, 0.18); break;
+        case 'ricochet': this.tone('sine', 2400 + Math.random() * 1600, 900, 0.12, 0.06); break;
+        case 'headshot': this.tone('triangle', 1400, 700, 0.12, 0.22); break;
+        case 'reload': this.burst(0.08, 3000, 0.25); break;
         case 'shot': this.burst(0.22, 5200, 0.9); this.tone('square', 180, 50, 0.12, 0.25); break;
         case 'hit': this.tone('square', 900, 500, 0.06, 0.15); break;
         case 'kill': this.tone('sawtooth', 300, 60, 0.35, 0.25); break;
@@ -2137,6 +2626,258 @@ void main() {
   }
 
   // ===========================================================================
+  // Skinned characters: clip sampling, cross-fades, lower/upper body layers,
+  // aim pitch and two-handed weapon placement.
+  // ===========================================================================
+
+  // Firearms: damage per bullet, rounds per second, spread (radians), magazine and reload time.
+  const WEAPON_STATS = {
+    rifle: { damage: 28, rate: 9, spread: 0.010, range: 160, mag: 30, reload: 2.1, pellets: 1, sound: 'rifle', recoil: 0.010, band: [9, 20] },
+    smg: { damage: 16, rate: 14, spread: 0.028, range: 90, mag: 40, reload: 1.8, pellets: 1, sound: 'smg', recoil: 0.008, band: [5, 12] },
+    shotgun: { damage: 12, rate: 1.4, spread: 0.065, range: 45, mag: 8, reload: 2.6, pellets: 9, sound: 'shotgun', recoil: 0.045, band: [3, 8] },
+    pistol: { damage: 24, rate: 4, spread: 0.014, range: 90, mag: 12, reload: 1.4, pellets: 1, sound: 'pistol', recoil: 0.02, band: [6, 14] },
+  };
+
+  // Weapon id -> upper body clips.
+  const WEAPON_POSES = {
+    rifle: { idle: 'rifle_idle', fire: 'rifle_fire', reload: 'rifle_reload' },
+    smg: { idle: 'pistol_idle', fire: 'pistol_fire', reload: 'smg_reload' },
+    shotgun: { idle: 'rifle_idle', fire: 'shotgun_fire', reload: 'rifle_reload' },
+    pistol: { idle: 'pistol_idle', fire: 'pistol_fire', reload: 'pistol_reload' },
+  };
+
+  function prepareCharacterAsset(id, c, buffer, renderer) {
+    const n = c.joints.length;
+    const asset = {
+      id, n, height: c.height || 1.78, sockets: c.sockets || {}, materials: c.materials || {},
+      parents: c.joints.map((j) => j.parent), names: c.joints.map((j) => j.name),
+      bindLocal: new Float32Array(buffer, c.bindLocal, n * 10),
+      inverseBind: new Float32Array(buffer, c.inverseBind, n * 16),
+      upper: new Uint8Array(n), clips: {},
+      gpu: renderer.uploadSkinnedMesh(c.mesh, buffer), count: c.mesh.indexCount,
+    };
+    asset.jointIndex = new Map(asset.names.map((name, i) => [name, i]));
+    for (const j of c.upperBody || []) asset.upper[j] = 1;
+    for (const [name, clip] of Object.entries(c.clips || {})) {
+      asset.clips[name] = { name, fps: clip.fps || 30, frames: clip.frames, loop: clip.loop, data: new Float32Array(buffer, clip.offset, clip.frames * n * 8) };
+      asset.clips[name].duration = clip.frames / asset.clips[name].fps;
+    }
+    // The bind pose doubles as a clip for layers without animation.
+    const bind = new Float32Array(n * 8);
+    for (let j = 0; j < n; j++) {
+      for (let k = 0; k < 7; k++) bind[j * 8 + k] = asset.bindLocal[j * 10 + k];
+      bind[j * 8 + 7] = asset.bindLocal[j * 10 + 7];
+    }
+    asset.clips.bind = { name: 'bind', fps: 1, frames: 1, loop: true, data: bind, duration: 1 };
+    return asset;
+  }
+
+  class CharacterAnimator {
+    constructor(asset, material, weapon) {
+      const n = asset.n;
+      this.asset = asset;
+      this.material = material;
+      this.weapon = weapon;
+      this.poses = weapon ? WEAPON_POSES[weapon.id] || WEAPON_POSES.rifle : null;
+      this.lower = { clip: asset.clips.idle || asset.clips.bind, time: 0, prev: null, prevTime: 0, fade: 1, fadeTime: 0.2 };
+      this.upper = { clip: null, time: 0, prev: null, prevTime: 0, fade: 1, fadeTime: 0.15, oneShot: false, onEnd: null };
+      this.full = null;
+      this.aimPitch = 0;
+      this.ribsYaw = this.poses ? 15 * Math.PI / 180 : 0;
+      this.bufA = new Float32Array(n * 8); this.bufB = new Float32Array(n * 8); this.bufC = new Float32Array(n * 8); this.bufD = new Float32Array(n * 8);
+      this.pose = new Float32Array(n * 8);
+      this.model = Array.from({ length: n }, () => M4.create());
+      this.palette = new Float32Array(n * 16);
+      this.tmp = M4.create();
+      this.weaponWorld = M4.create();
+      this.weaponLocal = M4.create();
+      this.muzzleWorld = [0, 0, 0];
+      this.headWorld = [0, 0, 0];
+      this.row = 0;
+      this.dead = false;
+      const J = asset.jointIndex;
+      this.j = { handR: J.get('hand.R'), handL: J.get('hand.L'), head: J.get('head'), ribs: J.get('ribs'), spine: J.get('spine'), palmR: J.get('palm.02.R') };
+      if (this.poses) this.playUpper(this.poses.idle, { fade: 0 });
+      else this.playUpper('idle', { fade: 0 });
+    }
+    clip(name) { return this.asset.clips[name] || null; }
+    setLower(name, opts = {}) {
+      const c = this.clip(name) || this.asset.clips.idle;
+      const L = this.lower;
+      if (L.clip === c) return;
+      // Keep the gait phase when switching between locomotion clips (walk -> run, forward -> strafe).
+      const phase = L.clip && opts.keepPhase ? (L.time / L.clip.duration) % 1 : 0;
+      L.prev = L.clip; L.prevTime = L.time;
+      L.clip = c; L.time = phase * c.duration;
+      L.fade = 0; L.fadeTime = opts.fade !== undefined ? opts.fade : 0.2;
+    }
+    playUpper(name, opts = {}) {
+      const c = this.clip(name);
+      if (!c) return false;
+      const U = this.upper;
+      U.prev = U.clip; U.prevTime = U.time;
+      U.clip = c; U.time = 0; U.fade = opts.fade === 0 ? 1 : 0; U.fadeTime = opts.fade !== undefined ? Math.max(opts.fade, 1e-3) : 0.12;
+      U.oneShot = !!opts.oneShot; U.onEnd = opts.onEnd || null; U.speed = opts.speed || 1;
+      return true;
+    }
+    fire() { if (this.poses && !this.reloading) this.playUpper(this.poses.fire, { oneShot: true, fade: 0.04, speed: 1.6 }); }
+    reload(duration) {
+      if (!this.poses) return;
+      const c = this.clip(this.poses.reload);
+      this.reloading = true;
+      this.playUpper(this.poses.reload, { oneShot: true, fade: 0.15, speed: c ? c.duration / Math.max(0.3, duration) : 1, onEnd: () => { this.reloading = false; } });
+    }
+    die() {
+      if (this.dead) return;
+      this.dead = true;
+      this.full = { clip: this.clip('dying') || this.asset.clips.bind, time: 0, then: this.clip('dead') };
+    }
+    revive() { this.dead = false; this.full = null; this.reloading = false; if (this.poses) this.playUpper(this.poses.idle, { fade: 0 }); }
+
+    // Locomotion from the velocity in character space: forward/back/strafe, walk/run/crouch.
+    locomotion(localX, localY, speed, grounded, crouch) {
+      if (this.full) return;
+      if (!grounded) { this.setLower('jump', { fade: 0.12 }); return; }
+      if (speed < 0.35) { this.setLower(crouch ? 'crouch' : 'idle', { fade: 0.25 }); return; }
+      const run = speed > 4.2 && !crouch;
+      let name;
+      if (crouch) name = 'crouch_walk';
+      else if (Math.abs(localY) >= Math.abs(localX)) name = localY >= 0 ? (run ? 'run' : 'walk') : (run ? 'run_back' : 'walk_back');
+      else name = localX > 0 ? (run ? 'run_right' : 'walk_right') : (run ? 'run_left' : 'walk_left');
+      this.setLower(name, { keepPhase: true, fade: 0.18 });
+      // Match the stride to the actual speed.
+      this.lower.speed = clamp(speed / (run ? 6.5 : crouch ? 1.6 : 2.6), 0.6, 1.6);
+    }
+
+    sample(clip, time, out) {
+      const n = this.asset.n, data = clip.data, frames = clip.frames;
+      let f = time * clip.fps;
+      if (clip.loop) { f %= frames; if (f < 0) f += frames; } else f = clamp(f, 0, frames - 1);
+      const i0 = Math.floor(f), i1 = clip.loop ? (i0 + 1) % frames : Math.min(i0 + 1, frames - 1), k = f - i0;
+      const o0 = i0 * n * 8, o1 = i1 * n * 8;
+      for (let j = 0; j < n; j++) {
+        const a = o0 + j * 8, b = o1 + j * 8, o = j * 8;
+        out[o] = data[a] + (data[b] - data[a]) * k;
+        out[o + 1] = data[a + 1] + (data[b + 1] - data[a + 1]) * k;
+        out[o + 2] = data[a + 2] + (data[b + 2] - data[a + 2]) * k;
+        const sgn = data[a + 3] * data[b + 3] + data[a + 4] * data[b + 4] + data[a + 5] * data[b + 5] + data[a + 6] * data[b + 6] < 0 ? -1 : 1;
+        let qx = data[a + 3] + (data[b + 3] * sgn - data[a + 3]) * k, qy = data[a + 4] + (data[b + 4] * sgn - data[a + 4]) * k;
+        let qz = data[a + 5] + (data[b + 5] * sgn - data[a + 5]) * k, qw = data[a + 6] + (data[b + 6] * sgn - data[a + 6]) * k;
+        const ql = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+        out[o + 3] = qx * ql; out[o + 4] = qy * ql; out[o + 5] = qz * ql; out[o + 6] = qw * ql;
+        out[o + 7] = data[a + 7] + (data[b + 7] - data[a + 7]) * k;
+      }
+    }
+    blend(a, b, w, out, mask) {
+      const n = this.asset.n;
+      for (let j = 0; j < n; j++) {
+        if (mask && !mask[j]) continue;
+        const o = j * 8;
+        out[o] = a[o] + (b[o] - a[o]) * w; out[o + 1] = a[o + 1] + (b[o + 1] - a[o + 1]) * w; out[o + 2] = a[o + 2] + (b[o + 2] - a[o + 2]) * w;
+        const sgn = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6] < 0 ? -1 : 1;
+        let qx = a[o + 3] + (b[o + 3] * sgn - a[o + 3]) * w, qy = a[o + 4] + (b[o + 4] * sgn - a[o + 4]) * w;
+        let qz = a[o + 5] + (b[o + 5] * sgn - a[o + 5]) * w, qw = a[o + 6] + (b[o + 6] * sgn - a[o + 6]) * w;
+        const ql = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+        out[o + 3] = qx * ql; out[o + 4] = qy * ql; out[o + 5] = qz * ql; out[o + 6] = qw * ql;
+        out[o + 7] = a[o + 7] + (b[o + 7] - a[o + 7]) * w;
+      }
+    }
+    layer(L, dt, out, scratch) {
+      L.time += dt * (L.speed || 1);
+      if (L.fade < 1) L.fade = Math.min(1, L.fade + dt / L.fadeTime);
+      this.sample(L.clip, L.time, out);
+      if (L.fade < 1 && L.prev) {
+        L.prevTime += dt * (L.speed || 1);
+        this.sample(L.prev, L.prevTime, scratch);
+        this.blend(scratch, out, smoothstep(0, 1, L.fade), out);
+      }
+    }
+
+    update(dt) {
+      const A = this.asset, n = A.n, pose = this.pose;
+      if (this.full) {
+        const F = this.full;
+        F.time += dt;
+        if (F.time >= F.clip.duration && F.then) { F.clip = F.then; F.time = 0; F.then = null; }
+        this.sample(F.clip, F.time, pose);
+      } else {
+        this.layer(this.lower, dt, pose, this.bufA);
+        const U = this.upper;
+        if (U.clip) {
+          this.layer(U, dt, this.bufB, this.bufC);
+          if (U.oneShot && U.time * U.clip.fps >= U.clip.frames - 0.01 && this.poses) {
+            const done = U.onEnd;
+            this.playUpper(this.poses.idle, { fade: 0.12 });
+            if (done) done();
+          }
+          for (let j = 0; j < n; j++) if (A.upper[j]) for (let k = 0; k < 8; k++) pose[j * 8 + k] = this.bufB[j * 8 + k];
+        }
+      }
+      // Local -> model space.
+      const par = A.parents, model = this.model;
+      for (let j = 0; j < n; j++) {
+        const o = j * 8, s = pose[o + 7];
+        M4.fromTRS(this.tmp, [pose[o], pose[o + 1], pose[o + 2]], [pose[o + 3], pose[o + 4], pose[o + 5], pose[o + 6]], [s, s, s]);
+        if (par[j] >= 0) M4.mul(model[j], model[par[j]], this.tmp); else model[j].set(this.tmp);
+      }
+      // Aim: twist/bend the upper body about the ribs joint (yaw offset for two-handed poses, then pitch).
+      const ribs = this.j.ribs;
+      if (ribs !== undefined && !this.full && (this.aimPitch || this.ribsYaw)) {
+        const pv = [model[ribs][12], model[ribs][13], model[ribs][14]];
+        const rot = M4.fromTRS(M4.create(), [0, 0, 0], Q.mul(Q.fromEuler(this.aimPitch, 0, 0), Q.axisZ(this.upper.clip && this.poses ? this.ribsYaw : 0)), [1, 1, 1]);
+        const T = M4.create(); T[12] = pv[0]; T[13] = pv[1]; T[14] = pv[2];
+        const Ti = M4.create(); Ti[12] = -pv[0]; Ti[13] = -pv[1]; Ti[14] = -pv[2];
+        const R = M4.mul(M4.create(), T, M4.mul(M4.create(), rot, Ti));
+        for (let j = 0; j < n; j++) if (A.upper[j]) M4.mul(model[j], R, model[j]);
+      }
+      for (let j = 0; j < n; j++) {
+        M4.mul(this.tmp, model[j], A.inverseBind.subarray(j * 16, j * 16 + 16));
+        this.palette.set(this.tmp, j * 16);
+      }
+      this.updateWeapon();
+    }
+
+    // Weapon follows the right hand and points at the left hand (two-handed grip), else along the aim.
+    updateWeapon() {
+      if (!this.weapon) return;
+      const m = this.model, jr = this.j.handR, jl = this.j.handL;
+      if (jr === undefined) return;
+      const rh = [m[jr][12], m[jr][13], m[jr][14]];
+      const pr = this.j.palmR !== undefined ? [m[this.j.palmR][12], m[this.j.palmR][13], m[this.j.palmR][14]] : rh;
+      const grip = vLerp(rh, pr, 0.6);
+      let dir = [0, Math.cos(this.aimPitch), Math.sin(this.aimPitch)];
+      if (jl !== undefined && this.weapon.id !== 'pistol') {
+        const lh = [m[jl][12], m[jl][13], m[jl][14]];
+        const d = vSub(lh, grip), l = vLen(d);
+        if (l > 0.12 && l < 0.75 && !this.full) dir = vNorm(vLerp(dir, vScale(d, 1 / l), 0.85));
+      }
+      if (this.full) {
+        // While dying the weapon simply stays in the hand along the forearm.
+        const fa = this.asset.jointIndex.get('forearm.R.02');
+        if (fa !== undefined) dir = vNorm(vSub(rh, [m[fa][12], m[fa][13], m[fa][14]]));
+      }
+      const up0 = Math.abs(dir[2]) > 0.95 ? [0, 1, 0] : [0, 0, 1];
+      const x = vNorm(vCross(dir, up0)), z = vCross(x, dir);
+      const W = this.weaponLocal;
+      W[0] = x[0]; W[1] = x[1]; W[2] = x[2]; W[3] = 0;
+      W[4] = dir[0]; W[5] = dir[1]; W[6] = dir[2]; W[7] = 0;
+      W[8] = z[0]; W[9] = z[1]; W[10] = z[2]; W[11] = 0;
+      const back = this.weapon.gripOffset || 0;
+      W[12] = grip[0] - dir[0] * back; W[13] = grip[1] - dir[1] * back; W[14] = grip[2] - dir[2] * back; W[15] = 1;
+    }
+
+    // World-space helpers (call after the node's world matrix is known).
+    finalize(nodeWorld) {
+      if (this.weapon) {
+        M4.mul(this.weaponWorld, nodeWorld, this.weaponLocal);
+        this.muzzleWorld = M4.point(this.weaponWorld, this.weapon.muzzle);
+      }
+      const h = this.j.head;
+      if (h !== undefined) this.headWorld = M4.point(nodeWorld, [this.model[h][12], this.model[h][13], this.model[h][14] + 0.08]);
+    }
+  }
+
+  // ===========================================================================
   // Game
   // ===========================================================================
 
@@ -2154,9 +2895,11 @@ void main() {
         sky: 'AUTO', fogDensity: 0.004, bloom: 1, ssao: true, exposure: 1, shadowQuality: 'MEDIUM', antiAliasing: 'FXAA',
         resolutionScale: 1, targetFps: 60, dynamicResolution: true, maxDynamicLights: 8, builtinRules: true,
         godRays: true, autoExposure: 0.6, clouds: true, grass: 'AUTO', surfaceDetail: true,
+        taa: true, ssr: true, volumetrics: true, contactShadows: true,
       }, data.settings || {});
       const params = new URLSearchParams(location.search);
       if (params.has('quality')) this.applyQualityOverride(params.get('quality'));
+      if (params.has('scale')) this.settings.resolutionScale = clamp(+params.get('scale') || 1, 0.4, 1);
       this.isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
       this.renderer = new Renderer(ui.canvas, this.settings);
       this.input = new Input(ui.canvas, this.gameData.input);
@@ -2171,10 +2914,10 @@ void main() {
 
     applyQualityOverride(q) {
       const presets = {
-        low: { shadowQuality: 'LOW', ssao: false, bloom: 0, antiAliasing: 'OFF', resolutionScale: 0.7, godRays: false, grass: 0 },
-        medium: { shadowQuality: 'MEDIUM', ssao: false, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 0.85, godRays: false },
-        high: { shadowQuality: 'HIGH', ssao: true, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 1 },
-        ultra: { shadowQuality: 'ULTRA', ssao: true, bloom: 1.2, antiAliasing: 'FXAA', resolutionScale: 1 },
+        low: { shadowQuality: 'LOW', ssao: false, bloom: 0, antiAliasing: 'FXAA', resolutionScale: 0.75, godRays: false, grass: 0, taa: false, ssr: false, volumetrics: false, contactShadows: false },
+        medium: { shadowQuality: 'MEDIUM', ssao: false, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 0.7, godRays: true, taa: true, ssr: false, volumetrics: false, contactShadows: false },
+        high: { shadowQuality: 'HIGH', ssao: true, bloom: 1, antiAliasing: 'FXAA', resolutionScale: 0.8, taa: true, ssr: true, volumetrics: true, contactShadows: true },
+        ultra: { shadowQuality: 'ULTRA', ssao: true, bloom: 1.2, antiAliasing: 'FXAA', resolutionScale: 1, taa: true, ssr: true, volumetrics: true, contactShadows: true },
       };
       Object.assign(this.settings, presets[q] || {});
     }
@@ -2205,7 +2948,7 @@ void main() {
         m.water = /water|ocean|lake|river|pond|\bsea\b|suv|daryo|ko'l/.test(name);
         const emissive = (m.emissionStrength || 0) > 0.05 && Math.max(...m.emission) > 0.05;
         // Procedural micro detail breaks up flat, untextured surfaces (stone, ground, walls).
-        m.detail = !this.settings.surfaceDetail || m.blend || m.water ? 0 : emissive ? 0.2 : m.baseColorTexture >= 0 ? 0.35 : 1;
+        m.detail = !this.settings.surfaceDetail || m.blend || m.water || m.character ? 0 : emissive ? 0.2 : m.baseColorTexture >= 0 ? 0.35 : 1;
       }
       if (!this.materials.length) this.materials.push({ baseColor: [0.8, 0.8, 0.8, 1], metallic: 0, roughness: 0.6, emission: [0, 0, 0], emissionStrength: 0, normalStrength: 1, blend: false, doubleSided: true, gpuTextures: [null, null, null, null], index: 0 });
       this.meshes = d.meshes.map((m, i) => {
@@ -2217,6 +2960,13 @@ void main() {
           indices: new IndexArray(this.buffer, m.index, m.indexCount),
         });
       });
+      this.characterAssets = {};
+      for (const [id, c] of Object.entries(d.characters || {})) this.characterAssets[id] = prepareCharacterAsset(id, c, this.buffer, r);
+      this.weaponAssets = {};
+      for (const [id, w] of Object.entries(d.weapons || {})) {
+        const mesh = this.meshes[w.mesh];
+        this.weaponAssets[id] = { id, mesh, muzzle: w.muzzle, length: w.length, material: this.materials[mesh.primitives[0].material] || this.materials[0], gripOffset: 0.02 };
+      }
       this.reset();
       progress(1);
     }
@@ -2230,6 +2980,14 @@ void main() {
         n.mesh = n.src.mesh >= 0 ? this.meshes[n.src.mesh] : null;
       }
       this.byName = new Map(this.nodes.map((n) => [n.name, n]));
+      for (const n of this.nodes) {
+        const ch = n.src.character;
+        const asset = ch && this.characterAssets[ch.asset];
+        if (!asset) continue;
+        const weapon = ch.weapon ? this.weaponAssets[ch.weapon] || null : null;
+        n.character = new CharacterAnimator(asset, this.materials[asset.materials[ch.variant]] || this.materials[0], weapon);
+        n.character.scale = M4.maxScale(n.world);
+      }
       this.order = [];
       const visit = (n) => { this.order.push(n); for (const c of n.children) visit(c); };
       for (const n of this.nodes) if (!n.parent) visit(n);
@@ -2261,6 +3019,9 @@ void main() {
       this.setupTimeline();
 
       this.time = 0;
+      this.fx = [];
+      this.flashes = [];
+      this.fovScale = 1;
       this.timers = new Map();
       this.triggerOverlaps = new Set();
       this.collisionOverlaps = new Set();
@@ -2303,13 +3064,17 @@ void main() {
         n.updateLocal();
         if (n.parent) M4.mul(n.world, n.parent.world, n.local); else n.world.set(n.local);
         // A removed (dead, collected) node hides its whole subtree.
-        n.hiddenSubtree = !n.alive || !!(n.parent && n.parent.hiddenSubtree);
+        n.hiddenSubtree = (!n.alive && !n.corpse) || !!(n.parent && n.parent.hiddenSubtree);
         n.effectiveVisible = n.visible && !n.hiddenSubtree;
       }
     }
 
     // World-space AABB of a node's mesh.
     nodeAABB(n) {
+      if (n.character) {
+        const p = n.worldPos, sc = n.character.scale || 1, r = 0.34 * sc;
+        return { min: [p[0] - r, p[1] - r, p[2]], max: [p[0] + r, p[1] + r, p[2] + n.character.asset.height * sc] };
+      }
       if (!n.mesh) {
         const p = n.worldPos, d = n.src.dimensions.map((v) => Math.max(v, 0.5) / 2);
         return { min: vSub(p, d), max: vAdd(p, d) };
@@ -2340,6 +3105,15 @@ void main() {
     computeBounds() {
       for (const n of this.nodes) {
         n.items = [];
+        if (n.character) {
+          const ch = n.character, A = ch.asset;
+          n.items.push({ node: n, world: n.world, gpu: A.gpu, first: 0, count: A.count, material: ch.material, matIndex: ch.material.index, meshIndex: -1, center: [0, 0, 0], radius: 1.3, castShadow: true, skin: ch });
+          if (ch.weapon) {
+            const wm = ch.weapon.mesh;
+            n.items.push({ node: n, world: ch.weaponWorld, gpu: wm.gpu, first: 0, count: wm.indexCount, material: ch.weapon.material, matIndex: ch.weapon.material.index, meshIndex: -2, center: [0, 0, 0], radius: 0.8, castShadow: true, weaponOf: ch });
+          }
+          continue;
+        }
         if (!n.mesh) continue;
         for (const prim of n.mesh.primitives) {
           n.items.push({
@@ -2515,7 +3289,11 @@ void main() {
           score: intensity / Math.max(1, vDist(pos, camPos) ** 2),
         });
       }
-      if (this.muzzle > 0 && this.cameraNode) {
+      for (const f of this.flashes || []) {
+        const k = 1 - f.age / f.life;
+        out.push({ pos: f.pos, range: 9, color: [1, 0.68, 0.36], intensity: 3.5 * k, spot: false, dir: [0, 0, -1], cosOuter: -1, cosInner: 1, score: 1e8 * k / Math.max(1, vDist(f.pos, camPos)) });
+      }
+      if (this.muzzle > 0 && this.cameraNode && !this.playerGun) {
         const p = vAdd(this.camPos, vScale(this.camForward, 1.6));
         out.push({ pos: p, range: 10, color: [1, 0.72, 0.38], intensity: 1.6 * this.muzzle, spot: false, dir: [0, 0, -1], cosOuter: -1, cosInner: 1, score: 1e9 });
       }
@@ -2533,6 +3311,11 @@ void main() {
       const box = this.subtreeAABB(p);
       const height = Math.max(0.6, box.max[2] - box.min[2]);
       const radius = clamp(Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1]) / 2, 0.22, 0.6);
+      if (p.character) {
+        const sc = p.character.scale || 1;
+        box.min = [p.position[0] - 0.3, p.position[1] - 0.3, p.position[2]];
+        box.max = [p.position[0] + 0.3, p.position[1] + 0.3, p.position[2] + p.character.asset.height * sc];
+      }
       p.ctrl = {
         type: pc.controller_type || 'THIRD_PERSON',
         walk: pc.walk_speed || 4, run: pc.run_speed || 7, jump: pc.jump_force || 5, gravity: pc.gravity || this.project.physics_gravity || 9.81,
@@ -2542,6 +3325,18 @@ void main() {
       };
       // Make sure a jump of jump_force clears ~1m even with Blender's small defaults.
       p.ctrl.jump = Math.max(p.ctrl.jump, Math.sqrt(2 * p.ctrl.gravity * 0.9));
+      if (p.character) {
+        p.ctrl.radius = 0.3;
+        p.ctrl.baseRot = [0, 0, 0, 1];
+        const f = M4.dir(p.world, [0, 1, 0]);
+        p.ctrl.yaw = Math.atan2(-f[0], f[1]);
+        if (p.character.weapon) {
+          const st = WEAPON_STATS[p.character.weapon.id] || WEAPON_STATS.rifle;
+          this.playerGun = { stats: st, mag: st.mag };
+          this.ensureVar(p, 'Ammo', 'INT', st.mag * 4);
+        }
+      } else this.playerGun = null;
+      this.reloadTimer = 0;
       this.snapToGround(p, p.ctrl, box);
       if (!p.health) p.health = { max: 100, cur: 100, destroy: false, gameOver: true };
       p.health.gameOver = true;
@@ -2559,6 +3354,7 @@ void main() {
         this.camYaw = dirYaw(fwd);
         this.camPitch = Math.asin(clamp(fwd[2], -0.99, 0.99));
       }
+      if (p.character) { this.camYaw = p.ctrl.yaw; this.camPitch = -0.08; this.camDistance = 2.4; }
       if (p.ctrl.type === 'FIRST_PERSON') {
         this.camPitch = 0;
         this.firstPersonHidden = new Set();
@@ -2602,8 +3398,8 @@ void main() {
         const npc = n.game.npc_behavior;
         if (!npc || !npc.enabled) continue;
         const box = this.subtreeAABB(n);
-        const height = Math.max(0.4, box.max[2] - box.min[2]);
-        const radius = clamp(Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1]) / 2, 0.2, 1.2);
+        const height = n.character ? n.character.asset.height * (n.character.scale || 1) : Math.max(0.4, box.max[2] - box.min[2]);
+        const radius = n.character ? 0.32 : clamp(Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1]) / 2, 0.2, 1.2);
         const hostile = ENEMY_TAGS.has(n.tag) || ['ATTACK', 'ENEMY_BOSS', 'GUARD_AREA'].includes(npc.behavior_template) || (n.health && npc.behavior_template !== 'COMPANION' && !['TALK', 'QUEST_GIVER', 'SHOPKEEPER', 'IDLE'].includes(npc.behavior_template) && ENEMY_TAGS.has(n.tag));
         n.actor = {
           npc, template: npc.behavior_template, hostile: hostile || ENEMY_TAGS.has(n.tag),
@@ -2613,6 +3409,16 @@ void main() {
           attackTimer: 0.6, bob: Math.random() * 6, seen: false,
         };
         if (!n.health && n.actor.hostile) n.health = { max: 60, cur: 60, destroy: true, gameOver: false };
+        if (n.character) {
+          const ac = n.actor;
+          ac.yaw = Math.atan2(-M4.dir(n.world, [0, 1, 0])[0], M4.dir(n.world, [0, 1, 0])[1]);
+          ac.baseRot = [0, 0, 0, 1];
+          if (n.character.weapon) {
+            const w = WEAPON_STATS[n.character.weapon.id] || WEAPON_STATS.rifle;
+            ac.gun = { stats: w, mag: w.mag, cooldown: 0, burst: 0, pause: 0.6 + Math.random(), reaction: 0, strafe: Math.random() < 0.5 ? -1 : 1, strafeTimer: 1 + Math.random() * 2, band: w.band, reloadTimer: 0 };
+            ac.detect = Math.max(ac.detect, 26);
+          }
+        }
         this.snapToGround(n, n.actor, box);
         n.actor.origin = n.position.slice();
         this.actors.push(n);
@@ -2951,6 +3757,9 @@ void main() {
       this.f3 = input.keys.has('F3');
 
       this.fireCooldown = Math.max(0, this.fireCooldown - dt);
+      // Shooter-style recovery: health regenerates after a few seconds without damage.
+      const pl = this.player;
+      if (this.playerGun && pl && pl.health && !this.dead && this.time - (this.lastHurt || -10) > 3.5) pl.health.cur = Math.min(pl.health.max, pl.health.cur + 18 * dt);
       this.muzzle = Math.max(0, this.muzzle - dt * 12);
       this.hitMarker = Math.max(0, this.hitMarker - dt);
       this.damageFlash = Math.max(0, this.damageFlash - dt * 1.8);
@@ -2964,6 +3773,7 @@ void main() {
       this.runBehaviors('ON_UPDATE', dt);
       this.runBehaviors('ON_TIMER', dt);
       this.updateTransforms();
+      this.updateFx(dt);
       this.updateTriggers(dt);
       if (this.usesCollisionEvents) this.updateCollisions(dt);
       this.updateCamera(dt);
@@ -3030,9 +3840,25 @@ void main() {
       const moving = Math.hypot(desired[0], desired[1]) > 0.1 && c.grounded;
       c.bob += dt * (moving ? (sprint ? 13 : 9) : 0);
       const lean = moving ? Math.sin(c.bob) * 0.03 : 0;
+      this.aiming = !!(p.character && input.down('AIM'));
+      if (p.character) {
+        // Shooter stance: the soldier always faces the aim direction and strafes.
+        c.yaw = this.camYaw;
+        p.rotation = Q.axisZ(c.yaw);
+        const f = yawDir(c.yaw), v = c.vel;
+        p.character.locomotion(v[0] * Math.cos(c.yaw) + v[1] * Math.sin(c.yaw), v[0] * f[0] + v[1] * f[1], Math.hypot(v[0], v[1]), c.grounded, crouch);
+        p.character.aimPitch = clamp(this.camPitch, -1.0, 1.0);
+        this.reloadTimer -= dt;
+        if (this.reloadTimer <= 0 && this.reloadPending) {
+          this.reloadPending = false;
+          const g = this.playerGun, reserve = this.ensureVar(p, 'Ammo', 'INT', 0);
+          const take = Math.min(g.stats.mag - g.mag, reserve.value);
+          g.mag += take; reserve.value -= take;
+        }
+      }
       // Side scrollers keep their authored orientation (sprites and boxes must not turn edge-on).
       const visualYaw = type === 'SIDE_SCROLLER' ? 0 : c.yaw;
-      p.rotation = Q.mul(Q.mul(Q.axisZ(visualYaw), Q.fromEuler(type === 'SIDE_SCROLLER' ? 0 : lean, 0, 0)), c.baseRot);
+      if (!p.character) p.rotation = Q.mul(Q.mul(Q.axisZ(visualYaw), Q.fromEuler(type === 'SIDE_SCROLLER' ? 0 : lean, 0, 0)), c.baseRot);
 
       if (p.position[2] < -60) { p.position = this.respawn.slice(); c.vel = [0, 0, 0]; this.damagePlayer(25, 'fall'); }
 
@@ -3069,6 +3895,27 @@ void main() {
         this.camPos = pos;
         this.camForward = vNorm(M4.dir(cam.world, [0, 0, -1]));
         return;
+      } else if (p.character) {
+        // Over-the-shoulder shooter camera; aiming (right mouse) pulls in and zooms.
+        const fwd = [-Math.sin(yaw) * Math.cos(pitch), Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch)];
+        const right = [Math.cos(yaw), Math.sin(yaw), 0];
+        const aim = this.aiming ? 1 : 0;
+        this.aimBlend = lerp(this.aimBlend || 0, aim, Math.min(1, dt * 10));
+        const feet = p.position[2] - c.footOffset;
+        const crouchDrop = this.input.down('CROUCH') ? 0.45 : 0;
+        const pivot = [p.position[0], p.position[1], feet + c.height * 0.95 - crouchDrop];
+        const shoulder = vAdd(pivot, vScale(right, lerp(0.72, 0.62, this.aimBlend)));
+        let dist = lerp(3.1, 1.4, this.aimBlend);
+        const back = vScale(fwd, -1);
+        const side = this.world.raycast(pivot, right, 0.85);
+        const sh = side ? vAdd(pivot, vScale(right, Math.max(0, side.t - 0.15))) : shoulder;
+        const hit = this.world.raycast(sh, back, dist + 0.25);
+        if (hit) dist = Math.max(0.35, hit.t - 0.25);
+        this.camDist = this.camDist === undefined ? dist : (dist < this.camDist ? dist : lerp(this.camDist, dist, Math.min(1, dt * 6)));
+        pos = vAdd(sh, vScale(back, this.camDist));
+        const shake = (this.shake || 0) * 0.04 + this.damageFlash * 0.03;
+        if (shake > 0.001) pos = vAdd(pos, [(Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake]);
+        this.fovScale = lerp(1, 0.62, this.aimBlend);
       } else {
         const fwd = [-Math.sin(yaw) * Math.cos(pitch), Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch)];
         const pivot = vAdd(head, [0, 0, c.height * 0.3]);
@@ -3103,6 +3950,29 @@ void main() {
     attack() {
       const p = this.player;
       if (!p) return;
+      if (this.playerGun) {
+        const g = this.playerGun, st = g.stats;
+        if (this.reloadTimer > 0) return;
+        if (g.mag <= 0) { this.reload(); this.fireCooldown = 0.25; return; }
+        g.mag -= 1;
+        this.fireCooldown = 1 / st.rate;
+        this.muzzle = 1;
+        // Aim point under the crosshair, then shoot from the muzzle towards it.
+        const o = this.camPos, f = this.camForward;
+        const wall = this.world.raycast(o, f, 300);
+        let aimT = wall ? wall.t : 300;
+        for (const a of this.actors) { if (!a.alive) continue; const h = this.rayCharacter(o, f, a); if (h && h.t < aimT) aimT = h.t; }
+        const target = vAdd(o, vScale(f, aimT));
+        const origin = p.character.muzzleWorld;
+        const moving = Math.hypot(p.ctrl.vel[0], p.ctrl.vel[1]) > 0.5;
+        const spread = st.spread * (this.aiming ? 0.45 : 1) * (moving ? 1.7 : 1) * (p.ctrl.grounded ? 1 : 2.5);
+        this.fireShot(p, origin, vNorm(vSub(target, origin)), st, true, spread);
+        p.character.fire();
+        this.camPitch = clamp(this.camPitch + st.recoil * (0.6 + Math.random() * 0.4), -1.35, 1.35);
+        this.camYaw += (Math.random() - 0.5) * st.recoil * 0.6;
+        if (g.mag === 0) this.reload();
+        return;
+      }
       if (this.shooter) {
         const ammo = p.vars.get('Ammo');
         if (ammo && ammo.value <= 0) { this.toast('Out of ammo — press R to reload'); this.fireCooldown = 0.3; return; }
@@ -3152,9 +4022,10 @@ void main() {
       return null;
     }
 
-    damageActor(a, amount, from) {
-      if (!a.health) return;
+    damageActor(a, amount, from, head) {
+      if (!a.health || !a.alive) return false;
       a.health.cur = Math.max(0, a.health.cur - amount);
+      if (a.actor) { a.actor.seen = true; if (a.actor.gun) a.actor.gun.reaction = Math.min(a.actor.gun.reaction || 0, 0.2); }
       a.flash = 1;
       a.actor.seen = true;
       a.actor.state = 'chase';
@@ -3165,13 +4036,16 @@ void main() {
       this.runBehaviorsOn(a, 'ON_HEALTH_CHANGED', 0);
       if (a.health.cur <= 0) {
         a.alive = false;
+        if (a.character) { a.corpse = true; a.character.die(); a.flash = 0; }
+        if (head) { this.sfx.play('headshot'); this.headshots = (this.headshots || 0) + 1; }
         this.sfx.play('kill');
         const p = this.player;
         if (p) {
           const kills = this.ensureVar(p, 'Kills', 'INT', 0); kills.value += 1;
           const score = this.ensureVar(p, 'Score', 'INT', 0); score.value += 100;
         }
-        this.toast(`${a.name.replace(/^BE_/, '').replace(/_/g, ' ')} eliminated  +100`);
+        this.toast(`${a.name.replace(/^(BE|KV)_/, '').replace(/_/g, ' ')} eliminated${head ? '  HEADSHOT' : ''}  +${head ? 150 : 100}`);
+        if (head && p) this.ensureVar(p, 'Score', 'INT', 0).value += 50;
         this.emit('kill', a);
         if (this.actors.every((x) => !x.alive || !x.actor.hostile) && this.actors.some((x) => x.actor.hostile)) this.toast('Area cleared!');
       }
@@ -3181,6 +4055,7 @@ void main() {
       const p = this.player;
       if (!p || this.dead || this.won || amount <= 0) return;
       p.health.cur = Math.max(0, p.health.cur - amount);
+      this.lastHurt = this.time;
       this.damageFlash = Math.min(1, this.damageFlash + amount / 25);
       if (source !== 'zone' || Math.random() < 0.08) this.sfx.play('hurt');
       this.runBehaviorsOn(p, 'ON_HEALTH_CHANGED', 0);
@@ -3189,6 +4064,16 @@ void main() {
 
     reload() {
       const p = this.player;
+      if (this.playerGun) {
+        const g = this.playerGun, reserve = this.ensureVar(p, 'Ammo', 'INT', 0);
+        if (this.reloadTimer > 0 || g.mag >= g.stats.mag) return;
+        if (reserve.value <= 0) { this.toast('No ammo left'); return; }
+        this.reloadTimer = g.stats.reload;
+        this.reloadPending = true;
+        p.character.reload(g.stats.reload);
+        this.sfx.play('reload');
+        return;
+      }
       const ammo = p && p.vars.get('Ammo');
       if (!ammo) return;
       const max = p.maxAmmo || (p.maxAmmo = Math.max(ammo.value, 30));
@@ -3253,6 +4138,15 @@ void main() {
 
     updateActors(dt) {
       const p = this.player;
+      // Attack tokens: only the closest few soldiers with a clear shot fire at once, the
+      // rest reposition (keeps fights readable and fair, like modern shooter AI).
+      if (p) {
+        const shooters = this.actors.filter((a) => a.alive && a.actor.gun && a.actor.seen && a.actor.los)
+          .sort((a, b) => vDist(a.position, p.position) - vDist(b.position, p.position));
+        const max = this.settings.maxAttackers || 3;
+        for (const a of this.actors) if (a.actor.gun) a.actor.gun.token = false;
+        for (let i = 0; i < Math.min(max, shooters.length); i++) shooters[i].actor.gun.token = true;
+      }
       for (const a of this.actors) {
         if (!a.alive) continue;
         const ac = a.actor;
@@ -3266,9 +4160,10 @@ void main() {
         if (target && !this.dead && dist < ac.detect && (ac.seen || (this.frameNo + a.index) % 10 === 0)) {
           if (!ac.seen && this.hasLineOfSight(eye, targetEye)) ac.seen = true;
         }
-        if (target && dist > ac.detect * 1.6) ac.seen = false;
+        if (target && dist > ac.detect * 1.6 && !ac.gun) ac.seen = false;
         const chaseSpeed = ac.speed * 1.25;
-        switch (ac.template) {
+        if (ac.gun && ac.hostile && target === p && p && !this.dead) desired = this.gunnerAI(a, dt, target, dist, eye, targetEye);
+        else switch (ac.template) {
           case 'PATROL':
           case 'GUARD_AREA':
           case 'IDLE':
@@ -3292,7 +4187,7 @@ void main() {
             if (target && (ac.seen || dist < ac.detect * 0.5)) desired = this.steer(a, target.position, chaseSpeed, ac.range * 0.9);
             else desired = this.wander(a, dt);
         }
-        if (ac.hostile && target === p && p && !this.dead && dist <= ac.range + 0.2 && Math.abs(toT[2]) < 2.5) {
+        if (!ac.gun && ac.hostile && target === p && p && !this.dead && dist <= ac.range + 0.2 && Math.abs(toT[2]) < 2.5) {
           ac.faceTarget = target.position;
           if (ac.attackTimer <= 0) {
             ac.attackTimer = ac.template === 'ENEMY_BOSS' ? 0.9 : 1.1;
@@ -3319,11 +4214,230 @@ void main() {
         else if (sp > 0.1) ac.yaw += angleWrap(dirYaw(desired) - ac.yaw) * Math.min(1, dt * 8);
         ac.bob += dt * sp * 2.6;
         ac.lunge = Math.max(0, (ac.lunge || 0) - dt);
-        const lean = (sp > 0.1 ? Math.sin(ac.bob) * 0.05 : 0) + (ac.lunge > 0 ? 0.25 : 0);
-        a.rotation = Q.mul(Q.mul(Q.axisZ(ac.yaw), Q.fromEuler(-lean, 0, Math.sin(ac.bob * 0.5) * 0.04)), ac.baseRot);
+        if (a.character) {
+          a.rotation = Q.axisZ(ac.yaw);
+          const f = yawDir(ac.yaw), v = ac.vel;
+          a.character.locomotion(v[0] * Math.cos(ac.yaw) + v[1] * Math.sin(ac.yaw), v[0] * f[0] + v[1] * f[1], Math.hypot(v[0], v[1]), ac.grounded, false);
+          a.character.aimPitch += ((ac.aimPitch || 0) - a.character.aimPitch) * Math.min(1, dt * 6);
+        } else {
+          const lean = (sp > 0.1 ? Math.sin(ac.bob) * 0.05 : 0) + (ac.lunge > 0 ? 0.25 : 0);
+          a.rotation = Q.mul(Q.mul(Q.axisZ(ac.yaw), Q.fromEuler(-lean, 0, Math.sin(ac.bob * 0.5) * 0.04)), ac.baseRot);
+        }
         // Falling out of the world removes the actor instead of looping respawns over a hole.
         if (a.position[2] < -60) { a.alive = false; this.log(`${a.name} fell out of the world`); }
       }
+    }
+
+    // Ranged soldier: keeps a weapon-dependent distance, strafes, fires bursts with human-like accuracy.
+    gunnerAI(a, dt, target, dist, eye, targetEye) {
+      const ac = a.actor, g = ac.gun, st = g.stats;
+      g.cooldown -= dt; g.reloadTimer -= dt; g.strafeTimer -= dt;
+      if (g.reloadTimer <= 0 && g.mag <= 0) g.mag = st.mag;
+      if (!ac.seen) {
+        ac.aimPitch = 0;
+        return this.wander(a, dt);
+      }
+      if (!ac.alerted) {
+        ac.alerted = true;
+        g.reaction = 0.35 + Math.random() * 0.55;
+        // Call out the contact: squad mates nearby join in.
+        for (const b of this.actors) if (b !== a && b.alive && b.actor.hostile && vDist(b.position, a.position) < 26) { b.actor.seen = true; }
+      }
+      if ((this.frameNo + a.index) % 3 === 0 || ac.los === undefined) ac.los = this.hasLineOfSight(eye, targetEye);
+      g.reaction -= dt;
+      ac.faceTarget = target.position;
+      const toT = vSub(targetEye, eye);
+      ac.aimPitch = Math.atan2(toT[2], Math.hypot(toT[0], toT[1]));
+      const [lo, hi] = g.band;
+      let desired;
+      if (!ac.los || dist > hi) desired = this.steer(a, target.position, ac.speed * (dist > hi * 1.6 ? 1.5 : 1.0), lo);
+      else if (dist < lo) desired = this.steer(a, vAdd(a.position, vSub(a.position, target.position)), ac.speed * 0.8, 0);
+      else {
+        if (g.strafeTimer <= 0) { g.strafe = -g.strafe; g.strafeTimer = 1.2 + Math.random() * 2.2; }
+        const d = vNorm([toT[0], toT[1], 0]), side = [-d[1] * g.strafe, d[0] * g.strafe, 0];
+        const probe = this.world.raycast(vAdd(a.position, [0, 0, 0.9]), side, 1.4);
+        if (probe && probe.normal[2] < 0.6) { g.strafe = -g.strafe; g.strafeTimer = 1.5; }
+        desired = vScale(side, ac.speed * 0.55);
+      }
+      if (ac.los && g.token && g.reaction <= 0 && g.reloadTimer <= 0) {
+        if (g.burst <= 0) {
+          g.pause -= dt;
+          if (g.pause <= 0) { g.burst = st.rate > 5 ? 3 + Math.floor(Math.random() * 5) : 1 + Math.floor(Math.random() * 2); }
+        } else if (g.cooldown <= 0) {
+          g.cooldown = 1.15 / st.rate;
+          g.burst -= 1; g.mag -= 1;
+          if (g.burst <= 0) g.pause = 0.5 + Math.random() * 1.3;
+          const pc = this.player.ctrl;
+          const moving = pc ? Math.hypot(pc.vel[0], pc.vel[1]) : 0;
+          // Human-like aim: wider at range and against a moving target, settling during a burst.
+          g.settle = g.burst > 2 ? Math.max(0.6, (g.settle || 1.4) - 0.15) : 1.4;
+          const spread = (st.spread * 3.2 + dist * 0.003 + moving * 0.012) * g.settle;
+          const aim = vAdd(targetEye, [0, 0, -0.25]);
+          const origin = a.character.muzzleWorld;
+          this.fireShot(a, origin, vNorm(vSub(aim, origin)), st, false, spread);
+          a.character.fire();
+          if (g.mag <= 0) { g.reloadTimer = st.reload; a.character.reload(st.reload); }
+        }
+      }
+      return desired;
+    }
+
+    // Random direction inside a cone around d.
+    jitter(d, spread) {
+      if (spread <= 0) return d;
+      const up = Math.abs(d[2]) > 0.95 ? [1, 0, 0] : [0, 0, 1];
+      const x = vNorm(vCross(d, up)), y = vCross(x, d);
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * spread;
+      return vNorm(vAdd(d, vAdd(vScale(x, Math.cos(a) * r), vScale(y, Math.sin(a) * r))));
+    }
+
+    rayCapsule(o, d, feet, radius, height) {
+      const ox = o[0] - feet[0], oy = o[1] - feet[1];
+      const A = d[0] * d[0] + d[1] * d[1], B = 2 * (ox * d[0] + oy * d[1]), C = ox * ox + oy * oy - radius * radius;
+      if (A < 1e-8) return null;
+      const disc = B * B - 4 * A * C;
+      if (disc < 0) return null;
+      const sq = Math.sqrt(disc);
+      for (const t of [(-B - sq) / (2 * A), (-B + sq) / (2 * A)]) {
+        if (t < 0) continue;
+        const z = o[2] + d[2] * t - feet[2];
+        if (z >= 0 && z <= height) return t;
+      }
+      return null;
+    }
+
+    raySphere(o, d, c, r) {
+      const oc = vSub(o, c), b = vDot(oc, d), cc = vDot(oc, oc) - r * r, h = b * b - cc;
+      if (h < 0) return null;
+      const t = -b - Math.sqrt(h);
+      return t >= 0 ? t : null;
+    }
+
+    // Ray against a character: head sphere first (headshots), then the body capsule.
+    rayCharacter(o, d, n) {
+      const c = n.ctrl || n.actor;
+      if (!c) return null;
+      const feet = [n.position[0], n.position[1], n.position[2] - c.footOffset];
+      let head = null;
+      if (n.character) head = this.raySphere(o, d, n.character.headWorld, 0.17);
+      const body = this.rayCapsule(o, d, feet, c.radius * 0.9, c.height * (n.character ? 0.86 : 1));
+      if (head !== null && (body === null || head <= body + 0.1)) return { t: head, head: true };
+      return body !== null ? { t: body, head: false } : null;
+    }
+
+    fireShot(shooter, origin, dir, st, byPlayer, spread) {
+      const camDist = this.camPos ? vDist(origin, this.camPos) : 0;
+      this.sfx.play(st.sound, byPlayer ? 1 : clamp(1.15 - camDist / 70, 0.06, 0.8));
+      this.spawnFx({ kind: 'flash', pos: origin, life: 0.06, size: st.pellets > 1 ? 0.42 : 0.3, color: [7, 4.6, 1.8] });
+      this.flashes.push({ pos: origin, life: 0.07, age: 0 });
+      let killed = false;
+      if (shooter && shooter.character && (byPlayer || camDist < 30)) this.spawnShell(shooter);
+      if (byPlayer) this.shake = Math.min(1, (this.shake || 0) + st.recoil * 12);
+      for (let k = 0; k < st.pellets; k++) {
+        const d = this.jitter(dir, spread);
+        const wall = this.world.raycast(origin, d, st.range);
+        let bestT = wall ? wall.t : st.range, best = null, head = false;
+        const candidates = byPlayer ? this.actors : [this.player];
+        for (const c of candidates) {
+          if (!c || !c.alive || c === shooter) continue;
+          const hit = this.rayCharacter(origin, d, c);
+          if (hit && hit.t < bestT) { bestT = hit.t; best = c; head = hit.head; }
+        }
+        const end = vAdd(origin, vScale(d, bestT));
+        if (k < 3) this.spawnFx({ kind: 'tracer', from: origin, to: end, life: Math.max(0.05, bestT / 420), speed: 420 });
+        if (best) {
+          this.spawnBlood(end, d, head);
+          const dmg = st.damage * (head ? 2.6 : 1);
+          if (byPlayer) { killed = this.damageActor(best, dmg, origin, head) || killed; }
+          else this.damagePlayer(dmg * (this.settings.enemyDamage || 0.2) * (head ? 1.3 : 1), shooter.name);
+        } else if (wall) {
+          this.spawnImpact(end, wall.normal);
+          if (Math.random() < 0.15) this.sfx.play('ricochet', clamp(1 - vDist(end, this.camPos || end) / 40, 0, 0.6));
+        }
+      }
+      return killed;
+    }
+
+    spawnFx(f) { f.age = 0; this.fx.push(f); if (this.fx.length > 900) this.fx.splice(0, this.fx.length - 900); }
+
+    spawnImpact(p, n) {
+      for (let i = 0; i < 5; i++) {
+        const v = vAdd(vScale(n, 2 + Math.random() * 3), [(Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, Math.random() * 2]);
+        this.spawnFx({ kind: 'spark', pos: p.slice(), vel: v, life: 0.18 + Math.random() * 0.2, size: 0.025, color: [6, 3.6, 1.2] });
+      }
+      this.spawnFx({ kind: 'puff', pos: vAdd(p, vScale(n, 0.05)), vel: vScale(n, 0.6), life: 0.7, size: 0.12, grow: 0.55, color: [0.42, 0.38, 0.33], alpha: 0.55 });
+      this.decals = this.decals || [];
+      this.decals.push({ pos: p.slice(), normal: n.slice(), age: 0, life: 25, size: 0.045 + Math.random() * 0.02 });
+      if (this.decals.length > 160) this.decals.shift();
+    }
+
+    spawnShell(n) {
+      const ch = n.character;
+      if (!ch || !ch.weapon) return;
+      const W = ch.weaponWorld, right = vNorm([W[0], W[1], W[2]]), fwd = vNorm([W[4], W[5], W[6]]);
+      const p = M4.point(W, [0.05, 0.12, 0.08]);
+      const v = vAdd(vAdd(vScale(right, 2 + Math.random()), [0, 0, 1.8 + Math.random()]), vScale(fwd, -0.5));
+      this.spawnFx({ kind: 'shell', pos: p, vel: v, life: 0.9, size: 0.012, color: [1.6, 1.1, 0.35] });
+      this.spawnFx({ kind: 'puff', pos: ch.muzzleWorld.slice(), vel: vScale(fwd, 0.8), life: 0.9, size: 0.06, grow: 0.35, color: [0.55, 0.55, 0.55], alpha: 0.25 });
+    }
+
+    spawnBlood(p, d, head) {
+      const n = vScale(d, -1);
+      this.spawnFx({ kind: 'puff', pos: p.slice(), vel: vScale(d, 0.8), life: head ? 0.6 : 0.45, size: head ? 0.2 : 0.14, grow: head ? 0.6 : 0.4, color: [0.32, 0.02, 0.02], alpha: 0.85 });
+      for (let i = 0; i < (head ? 8 : 4); i++) {
+        const v = vAdd(vScale(d, 1.5 + Math.random() * 2), [(Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 2.5, Math.random() * 2]);
+        this.spawnFx({ kind: 'drop', pos: p.slice(), vel: v, life: 0.5 + Math.random() * 0.3, size: 0.03, color: [0.28, 0.0, 0.0], alpha: 0.9 });
+      }
+      void n;
+    }
+
+    updateFx(dt) {
+      const g = 9.81;
+      for (const f of this.fx) {
+        f.age += dt;
+        if (f.vel) {
+          f.pos[0] += f.vel[0] * dt; f.pos[1] += f.vel[1] * dt; f.pos[2] += f.vel[2] * dt;
+          if (f.kind === 'spark' || f.kind === 'drop' || f.kind === 'shell') f.vel[2] -= g * dt;
+          if (f.kind === 'shell' && f.vel[2] < 0) {
+            const hit = this.world.raycast(f.pos, [0, 0, -1], 0.03);
+            if (hit) { f.vel[2] = -f.vel[2] * 0.35; f.vel[0] *= 0.5; f.vel[1] *= 0.5; }
+          }
+          else { const k = Math.exp(-3 * dt); f.vel[0] *= k; f.vel[1] *= k; f.vel[2] = f.vel[2] * k + 0.25 * dt; }
+        }
+      }
+      this.fx = this.fx.filter((f) => f.age < f.life);
+      if (this.decals) { for (const d of this.decals) d.age += dt; this.decals = this.decals.filter((d) => d.age < d.life); }
+      this.shake = Math.max(0, (this.shake || 0) - dt * 6);
+      for (const l of this.flashes) l.age += dt;
+      this.flashes = this.flashes.filter((l) => l.age < l.life);
+    }
+
+    fxList() {
+      const out = [];
+      for (const f of this.fx) {
+        const t = f.age / f.life, fade = 1 - t;
+        switch (f.kind) {
+          case 'flash': out.push({ shape: 3, pos: f.pos, size: f.size * (0.7 + t), color: vScale(f.color, fade).concat([Math.random()]) }); break;
+          case 'tracer': {
+            const len = vDist(f.from, f.to), dir = vScale(vSub(f.to, f.from), 1 / Math.max(len, 1e-6));
+            const head = Math.min(len, f.age * f.speed + 3), tail = Math.max(0, head - 7);
+            if (tail >= len) break;
+            out.push({ shape: 1, from: vAdd(f.from, vScale(dir, tail)), to: vAdd(f.from, vScale(dir, head)), width: 0.022, color: [2.6, 2.0, 1.1, 0] });
+            break;
+          }
+          case 'spark': out.push({ shape: 0, pos: f.pos, size: f.size, color: vScale(f.color, fade).concat([0]) }); break;
+          case 'shell': out.push({ shape: 0, pos: f.pos, size: f.size, color: vScale(f.color, 0.4 + 0.6 * fade).concat([0]) }); break;
+          default: {
+            const a = (f.alpha || 0.6) * fade * (f.kind === 'drop' ? 1 : Math.min(1, t * 8));
+            out.push({ shape: 2, pos: f.pos, size: f.size + (f.grow || 0) * t, color: vScale(f.color, a).concat([a]) });
+          }
+        }
+      }
+      for (const d of this.decals || []) {
+        const a = 0.85 * (1 - smoothstep(0.7, 1, d.age / d.life));
+        out.push({ shape: 2, pos: d.pos, normal: d.normal, size: d.size, color: [0.02 * a, 0.018 * a, 0.015 * a, a] });
+      }
+      return out;
     }
 
     steer(a, target, speed, stop) {
@@ -3609,6 +4723,7 @@ void main() {
     gameOver(text) {
       if (this.dead) return;
       this.dead = true;
+      if (this.player && this.player.character) this.player.character.die();
       this.sfx.play('lose');
       this.emit('gameover', text);
       setTimeout(() => {
@@ -3638,6 +4753,17 @@ void main() {
       for (const fn of BlendEngine.handlers[event] || []) { try { fn(this, ...args); } catch (err) { console.error(err); } }
     }
 
+    // Animate skinned characters and place their weapons (after transforms are final).
+    animateCharacters(dt) {
+      for (const n of this.nodes) {
+        const ch = n.character;
+        if (!ch || !n.effectiveVisible) continue;
+        if (!n.alive && !n.corpse) continue;
+        ch.update(dt);
+        ch.finalize(n.world);
+      }
+    }
+
     // ------------------------------------------------------------------- render
     renderFrame(opts = {}) {
       if (!this.camPos && this.cameraNode) this.setCameraFromNode();
@@ -3645,15 +4771,31 @@ void main() {
       const cinematic = !!this.activeCamera;
       const camData = cam ? Object.assign({}, cam.src.camera) : { type: 'PERSP', fovY: 1, near: 0.1, far: 500 };
       if (cam && cam.animFov) camData.fovY = cam.animFov;
+      if (!cinematic && this.fovScale && camData.fovY) camData.fovY *= this.fovScale;
       const world = cam ? cam.world : M4.create();
       if (cinematic) { this.camPos = cam.worldPos; this.camForward = vNorm(M4.dir(cam.world, [0, 0, -1])); }
       const items = [];
+      const boneRows = [];
       for (const n of this.nodes) {
         if (!n.effectiveVisible || !n.items.length) continue;
         if (cinematic && (n.tag === 'Weapon' || n.tag === 'FirstPersonArms')) continue;
+        if (n.character) {
+          if (boneRows.length >= this.renderer.boneRows) continue;
+          const ch = n.character;
+          ch.row = boneRows.length;
+          boneRows.push(ch.palette);
+          const center = vAdd(n.worldPos, [0, 0, 0.9 * (ch.scale || 1)]);
+          for (const it of n.items) {
+            if (it.weaponOf) { it.center = M4.point(it.world, [0, 0.3, 0]); it.radius = 0.7; } else { it.center = center; it.radius = 1.3 * (ch.scale || 1); }
+            it.flash = n.flash || 0;
+            items.push(it);
+          }
+          continue;
+        }
         const center = M4.point(n.world, n.mesh.center), radius = n.mesh.radius * M4.maxScale(n.world);
         for (const it of n.items) { it.center = center; it.radius = radius; it.flash = n.flash || (n.parent && n.parent.flash) || 0; items.push(it); }
       }
+      this.renderer.uploadBones(boneRows);
       const sun = this.sunNode && this.sunNode.alive
         ? { dir: vNorm(M4.dir(this.sunNode.world, [0, 0, 1])), color: this.sunNode.src.light.color, intensity: this.sunNode.src.light.intensity }
         : { dir: [0.3, -0.4, 0.86], color: [1, 1, 1], intensity: 0 };
@@ -3677,7 +4819,7 @@ void main() {
             ? M4.ortho(M4.create(), -camData.orthoScale / 2, camData.orthoScale / 2, -camData.orthoScale / 2 / aspect, camData.orthoScale / 2 / aspect, camData.near, camData.far)
             : M4.perspective(M4.create(), camData.fovY, aspect, near, far)),
         },
-        items, sun, env: this.env, lights: this.collectLights(camPos), shadowFocus: focus,
+        items, sun, env: this.env, lights: this.collectLights(camPos), shadowFocus: focus, fx: this.fxList ? this.fxList() : null,
         tint: this.damageFlash > 0 ? [1 + this.damageFlash * 0.6, 1 - this.damageFlash * 0.3, 1 - this.damageFlash * 0.3] : null,
       };
       this.renderer.render(frame, opts.output || null);
@@ -3884,6 +5026,8 @@ void main() {
         else if (game.state === 'cinematic') game.updateCinematic(realDt);
         else if (game.state === 'paused' && game.input.pressed('PAUSE')) start();
         if (game.state !== 'playing' && !game.camPos) game.updateCamera(0);
+        if (game.state !== 'paused') game.animateCharacters(game.state === 'playing' ? dt : realDt);
+        if (game.state !== 'playing' && game.state !== 'paused' && game.fx) game.updateFx(realDt);
         const t0 = performance.now();
         game.renderFrame();
         game.adaptResolution(realDt * 1000);
@@ -3903,7 +5047,13 @@ void main() {
     if (p && p.health) ui.healthBar.style.width = (100 * p.health.cur / p.health.max).toFixed(1) + '%';
     const parts = [];
     if (p) {
-      for (const [name, v] of p.vars) if (['Score', 'Ammo', 'Kills', 'Coins', 'Lives'].includes(name) || game.project.show_game_variables) parts.push(`${name} ${typeof v.value === 'number' ? Math.round(v.value * 100) / 100 : v.value}`);
+      for (const [name, v] of p.vars) {
+        if (name === 'Ammo' && game.playerGun) continue;
+        if (['Score', 'Ammo', 'Kills', 'Coins', 'Lives'].includes(name) || game.project.show_game_variables) parts.push(`${name} ${typeof v.value === 'number' ? Math.round(v.value * 100) / 100 : v.value}`);
+      }
+      if (game.playerGun) parts.push(`${(game.player.character.weapon.id || '').toUpperCase()} ${game.playerGun.mag} / ${(p.vars.get('Ammo') || { value: 0 }).value}${game.reloadTimer > 0 ? '  reloading' : ''}`);
+      const hostiles = game.actors.filter((a) => a.actor.hostile);
+      if (hostiles.length) parts.push(`Enemies ${hostiles.filter((a) => a.alive).length}/${hostiles.length}`);
       if (game.objectives.coins) parts.push(`Coins ${game.objectives.collected}/${game.objectives.coins}`);
     }
     const text = parts.join('   ');
@@ -3912,7 +5062,7 @@ void main() {
     ui.damage.style.opacity = Math.min(0.9, game.damageFlash).toFixed(2);
     if (!ui.perf.classList.contains('hidden')) {
       const r = game.renderer;
-      ui.perf.textContent = `FPS ${fps.toFixed(0)}  CPU ${cpuMs.toFixed(1)} ms\nDraws ${r.stats.draws}  Tris ${Math.round(r.stats.tris).toLocaleString()}\nRes ${r.size[0]}x${r.size[1]} (${Math.round(r.scale * 100)}%)\nCollision tris ${game.world.triangleCount.toLocaleString()}\n${r.hdr ? 'HDR' : 'LDR'} ${game.settings.ssao ? 'SSAO ' : ''}${game.settings.bloom ? 'Bloom ' : ''}${game.settings.antiAliasing !== 'OFF' ? 'FXAA' : ''}`;
+      ui.perf.textContent = `FPS ${fps.toFixed(0)}  CPU ${cpuMs.toFixed(1)} ms\nDraws ${r.stats.draws}  Tris ${Math.round(r.stats.tris).toLocaleString()}\nRes ${r.size[0]}x${r.size[1]} (${Math.round(r.scale * 100)}%)\nCollision tris ${game.world.triangleCount.toLocaleString()}\n${r.hdr ? 'HDR' : 'LDR'} ${r.taaOn ? 'TAA-upscale ' : game.settings.antiAliasing !== 'OFF' ? 'FXAA ' : ''}${game.settings.ssao ? 'SSAO ' : ''}${game.settings.ssr ? 'SSR ' : ''}${game.settings.volumetrics ? 'Volumetric ' : ''}${game.settings.bloom ? 'Bloom' : ''}\nCharacters ${r.stats.characters || 0}  FX ${r.stats.fx || 0}`;
     }
   }
 

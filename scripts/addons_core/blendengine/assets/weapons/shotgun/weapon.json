@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineWeapon",
+ "version": 1,
+ "id": "shotgun",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team (redeclipse.net)",
+ "source": "Red Eclipse 1.6 weapons/shotgun/shotgun-item.md5mesh",
+ "mesh": {
+  "vertexCount": 361,
+  "position": 0,
+  "normal": 4336,
+  "uv": 8672,
+  "indexType": "uint16",
+  "index": 11568,
+  "indexCount": 1227,
+  "boundsMin": [
+   -0.050743549460394055,
+   -0.4063365314016916,
+   -0.08456808882219798
+  ],
+  "boundsMax": [
+   0.05068120059677914,
+   0.5736634685983083,
+   0.18151776323595073
+  ]
+ },
+ "muzzle": [
+  -4.325101349860348e-05,
+  0.570275847008567,
+  0.11811402425289404
+ ],
+ "length": 0.98,
+ "textures": {
+  "base": "base.png",
+  "normal": "normal.png",
+  "orm": "orm.png",
+  "emit": "emit.png"
+ }
+}
