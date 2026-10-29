@@ -335,6 +335,51 @@ def describe_material(material, texture_index):
     return data
 
 
+TEXTURE_ASSET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "textures")
+
+
+def _engine_material_options(material, entry, texture_index):
+    """BlendEngine material options stored as custom properties.
+
+    be_triplanar  world-space texture projection, metres per tile (no UVs needed)
+    be_foliage    alpha-tested, two sided leaves that sway in the wind (value = wind strength)
+    be_terrain    JSON list of up to 3 layers [{"texture": name, "scale": metres}]:
+                  grass on flat ground, dirt patches, rock on slopes (assets/textures/<name>.png)
+    """
+    triplanar = material.get("be_triplanar")
+    if triplanar:
+        entry["triplanar"] = float(triplanar)
+    foliage = material.get("be_foliage")
+    if foliage:
+        entry["foliage"] = float(foliage)
+        entry["alphaClip"] = True
+        entry["doubleSided"] = True
+        entry["blend"] = False
+    if getattr(material, "blend_method", "") == "CLIP":
+        entry["alphaClip"] = True
+        entry["blend"] = False
+    terrain = material.get("be_terrain")
+    if terrain:
+        layers = []
+        for layer in json.loads(str(terrain))[:3]:
+            name = layer["texture"]
+            base = os.path.join(TEXTURE_ASSET_DIR, name + ".png")
+            normal = os.path.join(TEXTURE_ASSET_DIR, name + "_n.png")
+            if not os.path.isfile(base):
+                continue
+            base_image = bpy.data.images.load(base, check_existing=True)
+            normal_index = -1
+            if os.path.isfile(normal):
+                normal_image = bpy.data.images.load(normal, check_existing=True)
+                normal_image.colorspace_settings.name = "Non-Color"
+                normal_index = texture_index(normal_image, False)
+            layers.append({"base": texture_index(base_image, True), "normal": normal_index, "scale": float(layer.get("scale", 4.0))})
+        if layers:
+            while len(layers) < 3:
+                layers.append(layers[-1])
+            entry["terrain"] = layers
+
+
 def _image_mime(data, filepath=""):
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
@@ -494,7 +539,57 @@ def _camera_fov_y(camera, aspect):
     return max(0.05, min(2.6, 2.0 * math.atan(math.tan(fov_x * 0.5) / aspect)))
 
 
-def _world_data(scene):
+def _environment_image(world):
+    """Image of an Environment Texture feeding the world Background, if any."""
+    if world is None or world.node_tree is None:
+        return None, 0.0
+    for node in world.node_tree.nodes:
+        if node.type != "BACKGROUND":
+            continue
+        socket = node.inputs.get("Color")
+        if socket is None or not socket.is_linked:
+            return None, 0.0
+        source = socket.links[0].from_node
+        if source.type == "TEX_ENVIRONMENT" and source.image is not None:
+            rotation = 0.0
+            vector = source.inputs.get("Vector")
+            if vector is not None and vector.is_linked and vector.links[0].from_node.type == "MAPPING":
+                rot = vector.links[0].from_node.inputs.get("Rotation")
+                if rot is not None:
+                    rotation = float(rot.default_value[2])
+            return source.image, rotation
+    return None, 0.0
+
+
+def environment_pixels(image, max_width=1024):
+    """Float RGB pixels (rows bottom first) of an HDRI, downscaled to max_width."""
+    copy = image.copy()
+    try:
+        width, height = tuple(copy.size)
+        if not width:
+            return None
+        if width > max_width:
+            copy.scale(max_width, max(1, int(height * max_width / width)))
+            width, height = tuple(copy.size)
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        copy.pixels.foreach_get(pixels)
+        return width, height, pixels.reshape(height, width, 4)[..., :3]
+    finally:
+        bpy.data.images.remove(copy)
+
+
+def environment_sun(rgb, rotation=0.0):
+    """Direction (Blender world space) of the brightest region of an equirect HDRI."""
+    height, width = rgb.shape[:2]
+    lum = rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722
+    y, x = np.unravel_index(int(np.argmax(lum)), lum.shape)
+    u, v = (x + 0.5) / width, (y + 0.5) / height
+    phi = -(u - 0.5) * 2.0 * math.pi - rotation  # Blender: u = -atan2(y, x) / 2pi + 0.5
+    theta = (v - 0.5) * math.pi
+    return [math.cos(theta) * math.cos(phi), math.cos(theta) * math.sin(phi), math.sin(theta)], float(lum[y, x])
+
+
+def _world_data(scene, writer=None):
     world = scene.world
     color = [0.05, 0.05, 0.05]
     strength = 1.0
@@ -510,7 +605,24 @@ def _world_data(scene):
                     if strength_socket is not None:
                         strength = float(strength_socket.default_value)
                     break
-    return {"color": color, "strength": strength}
+    data = {"color": color, "strength": strength}
+    image, rotation = _environment_image(world)
+    if image is not None and writer is not None and np is not None:
+        try:
+            result = environment_pixels(image)
+        except Exception as ex:  # unreadable or missing file
+            print("[BlendEngine] Environment %s skipped: %s" % (image.name, ex))
+            result = None
+        if result is not None:
+            width, height, rgb = result
+            rgb = np.nan_to_num(np.clip(rgb, 0.0, 60000.0))
+            sun_dir, sun_peak = environment_sun(rgb, rotation)
+            data["environment"] = {
+                "name": image.name, "width": width, "height": height, "rotation": rotation,
+                "pixels": writer.add_array(rgb.astype(np.float16)), "sunDir": sun_dir, "sunPeak": sun_peak,
+            }
+            data["color"] = [float(v) for v in rgb.reshape(-1, 3).mean(axis=0)]
+    return data
 
 
 def _object_hidden_in_game(obj):
@@ -679,7 +791,9 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
                 "normalStrength": 1.0,
             })
         else:
-            materials.append(describe_material(material, texture_index))
+            entry = describe_material(material, texture_index)
+            _engine_material_options(material, entry, texture_index)
+            materials.append(entry)
         material_cache[key] = len(materials) - 1
         return material_cache[key]
 
@@ -875,7 +989,7 @@ def collect_scene(context, scene, game_data, texture_quality="MEDIUM", bake_anim
         "textures": textures,
         "nodes": nodes,
         "camera": camera_index,
-        "world": _world_data(scene),
+        "world": _world_data(scene, writer),
         "timeline": timeline,
         "colorManagement": {
             "viewTransform": view.view_transform,

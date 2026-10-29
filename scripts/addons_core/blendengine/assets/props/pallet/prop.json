@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "pallet",
+ "source": "Red Eclipse 1.6 data/nobiax/pallet2/model.obj",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 0.15,
+ "surfaces": [
+  {
+   "name": "pallet_v2",
+   "kind": "opaque",
+   "vertexCount": 880,
+   "position": 0,
+   "normal": 10560,
+   "uv": 21120,
+   "index": 28160,
+   "indexCount": 1320,
+   "textures": {
+    "base": "../textures/nobiax_pallet2_diffuse.png",
+    "normal": "../textures/nobiax_pallet2_normal.png"
+   }
+  }
+ ]
+}

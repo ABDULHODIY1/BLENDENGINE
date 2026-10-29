@@ -199,6 +199,28 @@ vec3 toneMap(vec3 x) {
 vec3 toSRGB(vec3 c) { return pow(c, vec3(1.0 / 2.2)); }
 `;
 
+  // HDRI image-based lighting: SH9 irradiance + GGX prefiltered equirect mip chain.
+  const ENV_GLSL = `
+uniform sampler2D uEnv;
+uniform float uEnvOn;
+uniform float uEnvStrength;
+uniform float uEnvRot;
+uniform float uEnvMaxLod;
+uniform vec3 uSH[9];
+vec2 envUV(vec3 d) {
+  float phi = atan(d.y, d.x) + uEnvRot;
+  return vec2(-phi / 6.2831853 + 0.5, atan(d.z, length(d.xy)) / 3.1415927 + 0.5);
+}
+vec3 envRadiance(vec3 d, float lod) { return textureLod(uEnv, envUV(d), lod).rgb * uEnvStrength; }
+vec3 shIrradiance(vec3 n) {
+  vec3 r = uSH[0] * (0.282095 * 3.1415927)
+    + (uSH[1] * n.y + uSH[2] * n.z + uSH[3] * n.x) * (0.488603 * 2.0943951)
+    + (uSH[4] * (1.092548 * n.x * n.y) + uSH[5] * (1.092548 * n.y * n.z) + uSH[6] * (0.315392 * (3.0 * n.z * n.z - 1.0))
+       + uSH[7] * (1.092548 * n.x * n.z) + uSH[8] * (0.546274 * (n.x * n.x - n.y * n.y))) * 0.7853982;
+  return max(r, vec3(0.0)) / 3.1415927 * uEnvStrength;
+}
+`;
+
   // Value noise / fbm used for procedural detail, water, clouds and grass.
   const NOISE_GLSL = `
 float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
@@ -247,6 +269,8 @@ uniform mat4 uShadowMat1;
 uniform mat3 uNormalMat;
 uniform vec2 uNormalBias;
 uniform float uInstanced;
+uniform float uWind;
+uniform float uWindTime;
 out vec3 vWorld;
 out vec3 vNormal;
 out vec2 vUV;
@@ -260,6 +284,13 @@ void main() {
   nmat = mat3(model);
 #endif
   vec4 w = model * vec4(aPos, 1.0);
+  if (uWind > 0.0) {
+    // Foliage sways more towards the top of the model.
+    float h = max(aPos.z, 0.0);
+    float phase = uWindTime * 1.3 + model[3].x * 0.37 + model[3].y * 0.29;
+    float gust = sin(phase) * 0.6 + sin(phase * 2.7 + aPos.x) * 0.25;
+    w.xy += vec2(0.9, 0.45) * gust * uWind * 0.012 * h * h + vec2(sin(uWindTime * 6.0 + aPos.x * 3.0 + aPos.y * 2.0)) * uWind * 0.015 * h;
+  }
   vWorld = w.xyz;
   vNormal = normalize(nmat * aNormal);
   vUV = vec2(aUV.x, 1.0 - aUV.y);
@@ -298,6 +329,15 @@ uniform vec2 uShadowTexel;
 uniform float uDetail;
 uniform float uWater;
 uniform float uTime;
+uniform float uTriplanar;
+uniform float uTerrain;
+uniform vec3 uLayerScale;
+uniform sampler2D uLayer0;
+uniform sampler2D uLayer1;
+uniform sampler2D uLayer2;
+uniform sampler2D uLayerN0;
+uniform sampler2D uLayerN1;
+uniform sampler2D uLayerN2;
 uniform int uLightCount;
 uniform vec4 uLightPos[MAX_LIGHTS];
 uniform vec4 uLightColor[MAX_LIGHTS];
@@ -312,6 +352,7 @@ uniform float uExposure;
 uniform float uBlend;
 ${SKY_GLSL}
 ${NOISE_GLSL}
+${ENV_GLSL}
 out vec4 outColor;
 
 // Bump mapping from a scalar height using screen-space derivatives (no tangents needed).
@@ -388,9 +429,51 @@ float shadowFactor() {
 
 float fog_amount(float d) { return uFogDensity > 0.0 ? 1.0 - exp(-uFogDensity * d) : 0.0; }
 
+// World-space projections: blockout walls and terrain need no UVs and never stretch.
+vec3 triWeights(vec3 n) { vec3 w = pow(abs(n), vec3(4.0)); return w / (w.x + w.y + w.z); }
+vec4 triSample(sampler2D t, vec3 p, vec3 w, float s) {
+  return texture(t, p.zy / s) * w.x + texture(t, p.xz / s) * w.y + texture(t, p.xy / s) * w.z;
+}
+vec3 triNormal(sampler2D t, vec3 p, vec3 n, vec3 w, float s, float strength) {
+  // Whiteout blend of three tangent-space normal maps.
+  vec3 tx = texture(t, p.zy / s).xyz * 2.0 - 1.0, ty = texture(t, p.xz / s).xyz * 2.0 - 1.0, tz = texture(t, p.xy / s).xyz * 2.0 - 1.0;
+  tx.xy *= strength; ty.xy *= strength; tz.xy *= strength;
+  vec3 nx = vec3(tx.xy + n.zy, abs(tx.z) * n.x), ny = vec3(ty.xy + n.xz, abs(ty.z) * n.y), nz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);
+  return normalize(nx.zyx * w.x + ny.xzy * w.y + nz.xyz * w.z);
+}
+vec3 planarNormal(sampler2D t, vec2 uv, vec3 n, float strength) {
+  vec3 tz = texture(t, uv).xyz * 2.0 - 1.0;
+  tz.xy *= strength;
+  return normalize(vec3(tz.xy + n.xy, abs(tz.z) * n.z));
+}
+
 void main() {
+  vec3 N = normalize(vNormal);
+  if (!gl_FrontFacing) N = -N;
   vec4 base = uBaseColor;
-  if (uTexFlags.x == 1) base *= texture(uBaseTex, vUV);
+  vec3 terrainN = vec3(0.0);
+  if (uTerrain > 0.5) {
+    // Terrain: grass on flat ground, dirt patches, rock on slopes (height-aware blending).
+    vec3 w = triWeights(N);
+    vec4 g = texture(uLayer0, vWorld.xy / uLayerScale.x);
+    vec4 d = texture(uLayer1, vWorld.xy / uLayerScale.y);
+    vec4 r = triSample(uLayer2, vWorld, w, uLayerScale.z);
+    float slope = 1.0 - N.z;
+    float rockW = smoothstep(0.22, 0.42, slope + (fbm(vWorld * 0.31) - 0.5) * 0.12);
+    float dirtW = smoothstep(0.5, 0.66, fbm(vWorld * 0.043) + (d.r - 0.5) * 0.25) * (1.0 - rockW);
+    float grassW = max(0.0, 1.0 - rockW - dirtW);
+    vec3 col = g.rgb * grassW + d.rgb * dirtW + r.rgb * rockW;
+    // Large scale tint variation hides tiling.
+    col *= 0.82 + 0.36 * fbm(vWorld * 0.021);
+    base = vec4(col, 1.0) * vec4(uBaseColor.rgb, 1.0);
+    vec3 ng = planarNormal(uLayerN0, vWorld.xy / uLayerScale.x, N, 1.0);
+    vec3 nd = planarNormal(uLayerN1, vWorld.xy / uLayerScale.y, N, 1.2);
+    vec3 nr = triNormal(uLayerN2, vWorld, N, w, uLayerScale.z, 1.4);
+    terrainN = normalize(ng * grassW + nd * dirtW + nr * rockW);
+  } else if (uTriplanar > 0.0) {
+    vec3 w = triWeights(N);
+    if (uTexFlags.x == 1) base *= triSample(uBaseTex, vWorld, w, uTriplanar);
+  } else if (uTexFlags.x == 1) base *= texture(uBaseTex, vUV);
   if (uBlend < 0.5 && uTexFlags.x == 1 && base.a < 0.5) discard;
   vec3 albedo = base.rgb;
   float rough = uRoughness;
@@ -398,8 +481,6 @@ void main() {
   rough = clamp(rough, 0.04, 1.0);
   float metal = uMetallic;
 
-  vec3 N = normalize(vNormal);
-  if (!gl_FrontFacing) N = -N;
   float camDist = length(uCamPos - vWorld);
   if (uDetail > 0.0) {
     // Procedural surface detail for untextured materials: large-scale tone
@@ -418,7 +499,9 @@ void main() {
     rough = 0.03;
     metal = 0.0;
   }
-  if (uTexFlags.y == 1) {
+  if (uTerrain > 0.5) N = terrainN;
+  else if (uTriplanar > 0.0 && uTexFlags.y == 1) N = triNormal(uNormalTex, vWorld, N, triWeights(N), uTriplanar, uNormalStrength);
+  else if (uTexFlags.y == 1) {
     vec3 t = texture(uNormalTex, vUV).xyz * 2.0 - 1.0;
     t.y = -t.y;
     t.xy *= uNormalStrength;
@@ -452,6 +535,12 @@ void main() {
   vec3 irradiance = mix(uSkyGround, mix(uSkyHorizon, uSkyZenith, clamp(N.z, 0.0, 1.0)), smoothstep(-0.6, 0.4, N.z)) * uAmbient;
   vec3 R = reflect(-V, N);
   vec3 prefiltered = mix(skyGradient(R) * uAmbient, irradiance, rough * rough);
+  if (uEnvOn > 0.5) {
+    irradiance = shIrradiance(N) * uAmbient;
+    // Reflections below the horizon see the ground, not the HDRI sky.
+    vec3 Rg = R.z < -0.05 ? normalize(vec3(R.xy, -R.z * 0.3)) : R;
+    prefiltered = envRadiance(Rg, rough * uEnvMaxLod) * uAmbient * mix(1.0, 0.35, smoothstep(-0.05, -0.4, R.z));
+  }
   vec2 ab = envBRDF(NoV, rough);
   float horizon = clamp(1.0 + 1.3 * dot(R, N), 0.0, 1.0);
   vec3 ambient = irradiance * albedo * (1.0 - metal) + prefiltered * (F0 * ab.x + ab.y) * horizon * horizon;
@@ -486,18 +575,34 @@ ${SKIN_GLSL}
 uniform mat4 uModel;
 uniform mat4 uViewProj;
 uniform float uInstanced;
+#ifdef ALPHA
+layout(location = 2) in vec2 aUV;
+out vec2 vUV;
+#endif
 void main() {
   mat4 model = uInstanced > 0.5 ? aInstance : uModel;
 #ifdef SKINNED
   model = model * skinMatrix();
+#endif
+#ifdef ALPHA
+  vUV = vec2(aUV.x, 1.0 - aUV.y);
 #endif
   gl_Position = uViewProj * model * vec4(aPos, 1.0);
 }`;
 
   const DEPTH_FS = `#version 300 es
 precision mediump float;
+#ifdef ALPHA
+in vec2 vUV;
+uniform sampler2D uBaseTex;
+#endif
 out vec4 o;
-void main() { o = vec4(1.0); }`;
+void main() {
+#ifdef ALPHA
+  if (texture(uBaseTex, vUV).a < 0.5) discard;
+#endif
+  o = vec4(1.0);
+}`;
 
   const FULLSCREEN_VS = `#version 300 es
 out vec2 vUV;
@@ -524,6 +629,7 @@ uniform float uTime;
 uniform float uClouds;
 ${SKY_GLSL}
 ${NOISE_GLSL}
+${ENV_GLSL}
 out vec4 outColor;
 void main() {
   vec4 w = uInvViewProj * vec4(vUV * 2.0 - 1.0, 1.0, 1.0);
@@ -531,7 +637,9 @@ void main() {
   // Orthographic views look along one direction; use a screen-space gradient instead.
   if (uOrtho > 0.5) d = normalize(vec3(0.0, 1.0, (vUV.y - 0.25) * 1.4));
   vec3 col = skyGradient(d) * uSkyIntensity;
-  if (uSunDisk > 0.5) {
+  if (uEnvOn > 0.5) {
+    col = envRadiance(d, 0.0) * uSkyIntensity;
+  } else if (uSunDisk > 0.5) {
     float mu = max(dot(d, uSunDir), 0.0);
     col += uSunColor * (0.015 * pow(mu, 6.0) + 0.12 * pow(mu, 120.0));
     col += uSunColor * 12.0 * smoothstep(0.99990, 0.99996, mu) * step(-0.02, d.z);
@@ -708,8 +816,27 @@ uniform sampler2D uRays;
 uniform vec3 uRaysColor;
 uniform sampler2D uLum;
 uniform float uAutoExposure;
+uniform float uToneMapper;
 ${SKY_GLSL}
 out vec4 o;
+// AgX (Blender 4's view transform), polynomial fit by Benjamin Wrensch; "punchy" look adds contrast.
+vec3 agxContrast(vec3 x) {
+  vec3 x2 = x * x, x4 = x2 * x2;
+  return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+vec3 agx(vec3 c) {
+  const mat3 inset = mat3(0.842479062253094, 0.0423282422610123, 0.0423756549057051, 0.0784335999999992, 0.878468636469772, 0.0784336, 0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+  const mat3 outset = mat3(1.19687900512017, -0.0528968517574562, -0.0529716355144438, -0.0980208811401368, 1.15190312990417, -0.0980434501171241, -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+  const float lo = -12.47393, hi = 4.026069;
+  c = inset * max(c, vec3(1e-10));
+  c = clamp(log2(c), lo, hi);
+  c = agxContrast((c - lo) / (hi - lo));
+  // Punchy look: a little more saturation and contrast.
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = l + 1.12 * (c - l);
+  c = pow(max(c, 0.0), vec3(1.08));
+  return clamp(pow(max(outset * c, 0.0), vec3(2.2)), 0.0, 1.0);
+}
 float linearDepth(float d) {
   // Converted with the inverse projection packed in uDofParams.w (near) and the far plane in z.
   float n = uDofParams.w, f = uDofParams.z;
@@ -750,7 +877,7 @@ void main() {
   }
   c *= uExposure * uTint * auto;
   c *= vec3(1.0 + uTemperature * 0.12, 1.0, 1.0 - uTemperature * 0.12);
-  c = toneMap(c);
+  c = uToneMapper > 0.5 ? agx(c) : toneMap(c);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, uSaturation);
   c = clamp((c - 0.5) * uContrast + 0.5, 0.0, 1.0);
@@ -814,6 +941,46 @@ void main() {
   o = vec4(c, 1.0);
 }`;
 
+
+  // GGX prefiltering of an equirect HDRI into a mip level (importance sampled, mip-filtered source).
+  const PREFILTER_FS = `#version 300 es
+precision highp float;
+in vec2 vUV;
+uniform sampler2D uSrc;
+uniform float uRough;
+uniform vec2 uSrcSize;
+out vec4 o;
+const float PI = 3.1415927;
+vec3 dirFromUV(vec2 uv) { float phi = -(uv.x - 0.5) * 2.0 * PI, th = (uv.y - 0.5) * PI; return vec3(cos(th) * cos(phi), cos(th) * sin(phi), sin(th)); }
+vec2 uvFromDir(vec3 d) { return vec2(-atan(d.y, d.x) / (2.0 * PI) + 0.5, atan(d.z, length(d.xy)) / PI + 0.5); }
+vec2 hammersley(uint i, uint n) { uint b = i; b = (b << 16u) | (b >> 16u); b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u); b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u); b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u); b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u); return vec2(float(i) / float(n), float(b) * 2.3283064365386963e-10); }
+void main() {
+  vec3 N = dirFromUV(vUV);
+  if (uRough < 0.01) { o = vec4(textureLod(uSrc, vUV, 0.0).rgb, 1.0); return; }
+  vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+  vec3 T = normalize(cross(up, N)), B = cross(N, T);
+  float a = uRough * uRough;
+  vec3 sum = vec3(0.0); float wsum = 0.0;
+  const uint COUNT = 96u;
+  for (uint i = 0u; i < COUNT; i++) {
+    vec2 x = hammersley(i, COUNT);
+    float phi = 2.0 * PI * x.x;
+    float cosT = sqrt((1.0 - x.y) / (1.0 + (a * a - 1.0) * x.y)), sinT = sqrt(1.0 - cosT * cosT);
+    vec3 H = T * (sinT * cos(phi)) + B * (sinT * sin(phi)) + N * cosT;
+    vec3 L = 2.0 * dot(N, H) * H - N;
+    float NoL = dot(N, L);
+    if (NoL <= 0.0) continue;
+    float NoH = max(dot(N, H), 0.0);
+    float d = NoH * NoH * (a * a - 1.0) + 1.0;
+    float D = a * a / (PI * d * d);
+    float pdf = D * 0.25 + 1e-4;
+    float saSample = 1.0 / (float(COUNT) * pdf), saTexel = 4.0 * PI / (uSrcSize.x * uSrcSize.y);
+    float lod = clamp(0.5 * log2(saSample / saTexel) + 1.0, 0.0, 10.0);
+    sum += min(textureLod(uSrc, uvFromDir(L), lod).rgb, vec3(64.0)) * NoL;
+    wsum += NoL;
+  }
+  o = vec4(sum / max(wsum, 1e-4), 1.0);
+}`;
 
   // Temporal anti-aliasing with upscaling: jittered low-resolution frames are accumulated
   // into a full-resolution history (reprojected with the camera, clipped to the current
@@ -1056,7 +1223,7 @@ void main() {
   vec3 front = vec3(-dir.y, dir.x, 0.0);
   float gust = sin(uTime * 1.6 + root.x * 0.31 + root.y * 0.23) * 0.6 + sin(uTime * 3.7 + root.x * 1.7) * 0.25;
   float bend = t * t;
-  vec3 p = root + side * aBlade.x * (0.055 * (1.0 - t * 0.85)) * (0.6 + h)
+  vec3 p = root + side * aBlade.x * (0.024 * (1.0 - t * 0.9)) * (0.7 + h)
          + front * bend * h * 0.28
          + vec3(0.55, 0.25, 0.0) * gust * bend * h * 0.5
          + vec3(0.0, 0.0, t * h);
@@ -1281,6 +1448,7 @@ void main() {
       this.depthProg = new Program(gl, DEPTH_VS, DEPTH_FS, 'depth');
       this.pbrSkin = new Program(gl, PBR_VS, PBR_FS, 'pbr-skinned', ['SKINNED']);
       this.depthSkin = new Program(gl, DEPTH_VS, DEPTH_FS, 'depth-skinned', ['SKINNED']);
+      this.depthAlpha = new Program(gl, DEPTH_VS, DEPTH_FS, 'depth-alpha', ['ALPHA']);
       this.fxProg = new Program(gl, FX_VS, FX_FS, 'fx');
       this.fxData = new Float32Array(4096 * 6 * 10);
       this.fxBuffer = gl.createBuffer();
@@ -1317,6 +1485,7 @@ void main() {
         this.godrays = new Program(gl, FULLSCREEN_VS, GODRAYS_FS, 'godrays');
         this.lum = new Program(gl, FULLSCREEN_VS, LUM_FS, 'lum');
         this.taa = new Program(gl, FULLSCREEN_VS, TAA_FS, 'taa');
+        this.prefilter = new Program(gl, FULLSCREEN_VS, PREFILTER_FS, 'prefilter');
         this.ssr = new Program(gl, FULLSCREEN_VS, SSR_FS, 'ssr');
         this.volume = new Program(gl, FULLSCREEN_VS, VOLUME_FS, 'volume');
         this.blurRgb = new Program(gl, FULLSCREEN_VS, BLUR_FS.replace('.r;', '.rgb;').replace('float s = 0.0;', 'vec3 s = vec3(0.0);').replace('vec4(vec3(s / 16.0), 1.0)', 'vec4(s / 16.0, 1.0)'), 'blur-rgb');
@@ -1330,6 +1499,7 @@ void main() {
       this.frameNo = 0;
       this.emptyVao = gl.createVertexArray();
       this.white = this.makeSolidTexture([255, 255, 255, 255]);
+      this.flatNormal = this.makeSolidTexture([128, 128, 255, 255]);
       this.black = this.makeSolidTexture([0, 0, 0, 255]);
       const [shadowSize, shadowRadius] = QUALITY.shadow[settings.shadowQuality] || QUALITY.shadow.MEDIUM;
       this.shadowRadius = shadowRadius;
@@ -1409,6 +1579,98 @@ void main() {
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new IndexArray(buffer, mesh.index, mesh.indexCount), gl.STATIC_DRAW);
       gl.bindVertexArray(null);
       return { vao, indexType: mesh.indexType === 'uint16' ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT, indexSize: mesh.indexType === 'uint16' ? 2 : 4 };
+    }
+
+    // HDRI environment: half-float RGB rows (bottom first). Builds a GGX prefiltered mip chain
+    // and SH9 irradiance; returns sky colours for the gradient-based fallbacks (grass, fog).
+    setEnvironment(env, buffer) {
+      const gl = this.gl;
+      const W = env.width, H = env.height;
+      const half = new Uint16Array(buffer, env.pixels, W * H * 3);
+      const rgba = new Uint16Array(W * H * 4);
+      for (let i = 0, j = 0; i < W * H; i++, j += 3) { rgba[i * 4] = half[j]; rgba[i * 4 + 1] = half[j + 1]; rgba[i * 4 + 2] = half[j + 2]; rgba[i * 4 + 3] = 0x3c00; }
+      const levels = Math.min(7, Math.floor(Math.log2(Math.min(W, H))) + 1);
+      const makeTex = (lv) => {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texStorage2D(gl.TEXTURE_2D, lv, gl.RGBA16F, W, H);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      };
+      const fullLevels = Math.floor(Math.log2(Math.max(W, H))) + 1;
+      const src = makeTex(fullLevels);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.HALF_FLOAT, rgba);
+      let tex = src, maxLod = 0;
+      if (this.hdr && this.prefilter) {
+        gl.generateMipmap(gl.TEXTURE_2D);
+        tex = makeTex(levels);
+        const fbo = gl.createFramebuffer();
+        const p = this.prefilter.use();
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src);
+        p.i1('uSrc', 0); p.v2('uSrcSize', W, H);
+        gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+        for (let lv = 0; lv < levels; lv++) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, lv);
+          gl.viewport(0, 0, Math.max(1, W >> lv), Math.max(1, H >> lv));
+          p.f1('uRough', lv / (levels - 1));
+          p.f1('uClipDepth', 0);
+          gl.bindVertexArray(this.emptyVao);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fbo);
+        gl.deleteTexture(src);
+        gl.enable(gl.DEPTH_TEST);
+        maxLod = levels - 1;
+      } else {
+        gl.generateMipmap(gl.TEXTURE_2D);
+        maxLod = Math.min(6, fullLevels - 1);
+      }
+      // SH9 projection of the radiance (decoded on the CPU, every 4th texel).
+      const f16 = (h) => { const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023; return e === 0 ? s * m * 5.960464477539063e-8 : e === 31 ? 0 : s * (1 + m / 1024) * Math.pow(2, e - 15); };
+      const sh = new Float32Array(27);
+      const step = W >= 512 ? 4 : 2;
+      for (let y = 0; y < H; y += step) {
+        const th = ((y + 0.5) / H - 0.5) * Math.PI, ct = Math.cos(th), st = Math.sin(th);
+        const dw = (2 * Math.PI / W) * (Math.PI / H) * ct * step * step;
+        for (let x = 0; x < W; x += step) {
+          const phi = -((x + 0.5) / W - 0.5) * 2 * Math.PI - (env.rotation || 0);
+          const dx = ct * Math.cos(phi), dy = ct * Math.sin(phi), dz = st;
+          const o = (y * W + x) * 3;
+          const r = Math.min(f16(half[o]), 64), g = Math.min(f16(half[o + 1]), 64), b = Math.min(f16(half[o + 2]), 64);
+          const Y = [0.282095, 0.488603 * dy, 0.488603 * dz, 0.488603 * dx, 1.092548 * dx * dy, 1.092548 * dy * dz, 0.315392 * (3 * dz * dz - 1), 1.092548 * dx * dz, 0.546274 * (dx * dx - dy * dy)];
+          for (let k = 0; k < 9; k++) { const w = Y[k] * dw; sh[k * 3] += r * w; sh[k * 3 + 1] += g * w; sh[k * 3 + 2] += b * w; }
+        }
+      }
+      // The rotation is applied when sampling; SH was projected in rotated (world) space above.
+      this.env = { tex, maxLod, sh, rotation: env.rotation || 0, strength: env.strength || 1 };
+      const irr = (n) => {
+        const [x, y, z] = n;
+        const Y = [0.282095 * Math.PI, 0.488603 * y * 2.0943951, 0.488603 * z * 2.0943951, 0.488603 * x * 2.0943951, 1.092548 * x * y * 0.7853982, 1.092548 * y * z * 0.7853982, 0.315392 * (3 * z * z - 1) * 0.7853982, 1.092548 * x * z * 0.7853982, 0.546274 * (x * x - y * y) * 0.7853982];
+        const c = [0, 0, 0];
+        for (let k = 0; k < 9; k++) for (let i = 0; i < 3; i++) c[i] += sh[k * 3 + i] * Y[k];
+        return c.map((v) => Math.max(v, 0) / Math.PI * this.env.strength);
+      };
+      const side = vScale(vAdd(vAdd(irr([1, 0, 0.15]), irr([-1, 0, 0.15])), vAdd(irr([0, 1, 0.15]), irr([0, -1, 0.15]))), 0.25);
+      return { zenith: irr([0, 0, 1]), horizon: side, ground: irr([0, 0, -1]) };
+    }
+
+    bindEnvironment(p) {
+      const gl = this.gl, e = this.env;
+      p.f1('uEnvOn', e ? 1 : 0);
+      if (!e) return;
+      gl.activeTexture(gl.TEXTURE7);
+      gl.bindTexture(gl.TEXTURE_2D, e.tex);
+      p.i1('uEnv', 7);
+      p.f1('uEnvStrength', e.strength);
+      p.f1('uEnvRot', e.rotation);
+      p.f1('uEnvMaxLod', e.maxLod);
+      gl.uniform3fv(p.loc('uSH'), e.sh);
     }
 
     uploadSkinnedMesh(mesh, buffer) {
@@ -1600,6 +1862,7 @@ void main() {
       s.f1('uExposure', env.exposure);
       s.f1('uTime', frame.time || 0);
       s.f1('uClouds', env.clouds || 0);
+      this.bindEnvironment(s);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       if (transparent.length) {
@@ -1678,6 +1941,7 @@ void main() {
       p.v2('uNormalBias', shadowOn ? this.cascadeRadii[0] / sw * 1.5 : 0, shadowOn ? this.cascadeRadii[1] / sw * 1.5 : 0);
       p.v2('uShadowTexel', 1 / sw, 1 / sw);
       p.f1('uTime', frame.time || 0);
+      p.f1('uWindTime', frame.time || 0);
       p.f1('uInstanced', 0);
       p.v3('uCamPos', frame.camera.pos);
       p.v3('uSunDir', sun.dir);
@@ -1691,9 +1955,10 @@ void main() {
       p.f1('uDirect', direct ? 1 : 0);
       p.f1('uExposure', env.exposure);
       p.i1('uBaseTex', 0); p.i1('uNormalTex', 1); p.i1('uRoughTex', 2); p.i1('uEmitTex', 3); p.i1('uShadowMap0', 4); p.i1('uShadowMap1', 5);
+      for (let i = 0; i < 3; i++) { p.i1('uLayer' + i, 8 + i); p.i1('uLayerN' + i, 11 + i); }
       this.bindShadowMaps();
       this.uploadLights(p, frame.lights);
-
+      this.bindEnvironment(p);
     }
 
     // Film accumulation: clear, add weighted sub-frames, then present with grain.
@@ -1753,6 +2018,17 @@ void main() {
       p.f1('uBlend', m.blend ? 1 : 0);
       p.f1('uDetail', m.detail || 0);
       p.f1('uWater', m.water ? 1 : 0);
+      p.f1('uTriplanar', m.triplanar || 0);
+      p.f1('uWind', m.foliage || 0);
+      p.f1('uTerrain', m.gpuLayers ? 1 : 0);
+      if (m.gpuLayers) {
+        p.v3('uLayerScale', m.terrain.map((l) => l.scale));
+        for (let i = 0; i < 3; i++) {
+          gl.activeTexture(gl.TEXTURE8 + i); gl.bindTexture(gl.TEXTURE_2D, m.gpuLayers[i][0] || this.white);
+          gl.activeTexture(gl.TEXTURE11 + i); gl.bindTexture(gl.TEXTURE_2D, m.gpuLayers[i][1] || this.flatNormal);
+          p.i1('uLayer' + i, 8 + i); p.i1('uLayerN' + i, 11 + i);
+        }
+      }
       const tex = m.gpuTextures;
       gl.uniform4i(p.loc('uTexFlags'), tex[0] ? 1 : 0, tex[1] ? 1 : 0, tex[2] ? 1 : 0, tex[3] ? 1 : 0);
       for (let i = 0; i < 4; i++) {
@@ -1860,8 +2136,29 @@ void main() {
         list.push(item);
       }
       list.sort((a, b) => a.matIndex - b.matIndex || a.meshIndex - b.meshIndex || a.first - b.first);
-      const statics = list.filter((it) => !it.skin), chars = list.filter((it) => it.skin);
+      const statics = list.filter((it) => !it.skin && !it.material.alphaClip), chars = list.filter((it) => it.skin);
+      const leaves = list.filter((it) => !it.skin && it.material.alphaClip);
       this.drawBatched(p, statics, false);
+      if (leaves.length) {
+        // Leaves and fences cast shadows through their alpha mask.
+        const a = this.depthAlpha.use();
+        a.m4('uViewProj', mat);
+        a.f1('uInstanced', 0);
+        a.i1('uBaseTex', 0);
+        let lastMat = null;
+        for (let i = 0; i < leaves.length;) {
+          const it = leaves[i];
+          if (it.material !== lastMat) {
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, it.material.gpuTextures[0] || this.white);
+            lastMat = it.material;
+          }
+          let j = i + 1;
+          while (j < leaves.length && leaves[j].gpu === it.gpu && leaves[j].first === it.first && leaves[j].material === it.material) j++;
+          this.drawBatched(a, leaves.slice(i, j), false);
+          i = j;
+        }
+      }
       if (chars.length) {
         const k = this.depthSkin.use();
         k.m4('uViewProj', mat);
@@ -2132,6 +2429,7 @@ void main() {
       c.i1('uScene', 0); c.i1('uBloom', 1); c.i1('uAO', 2); c.i1('uDepth', 3); c.i1('uDof', 4); c.i1('uRays', 5); c.i1('uLum', 6);
       c.v3('uRaysColor', raysColor);
       c.f1('uAutoExposure', autoExposure);
+      c.f1('uToneMapper', st.toneMapper === 'ACES' ? 0 : 1);
       c.f1('uDofOn', dofOn ? 1 : 0);
       c.v4('uDofParams', dofParams);
       c.f1('uChromatic', film ? film.chromatic || 0 : 0);
@@ -2895,7 +3193,7 @@ void main() {
         sky: 'AUTO', fogDensity: 0.004, bloom: 1, ssao: true, exposure: 1, shadowQuality: 'MEDIUM', antiAliasing: 'FXAA',
         resolutionScale: 1, targetFps: 60, dynamicResolution: true, maxDynamicLights: 8, builtinRules: true,
         godRays: true, autoExposure: 0.6, clouds: true, grass: 'AUTO', surfaceDetail: true,
-        taa: true, ssr: true, volumetrics: true, contactShadows: true,
+        taa: true, ssr: true, volumetrics: true, contactShadows: true, toneMapper: 'AGX',
       }, data.settings || {});
       const params = new URLSearchParams(location.search);
       if (params.has('quality')) this.applyQualityOverride(params.get('quality'));
@@ -2944,11 +3242,12 @@ void main() {
         gpuTextures: [m.baseColorTexture, m.normalTexture, m.roughnessTexture, m.emissionTexture].map((ti) => (ti >= 0 ? textures[ti] : null)),
       }));
       for (const m of this.materials) {
+        if (m.terrain) m.gpuLayers = m.terrain.map((l) => [l.base >= 0 ? textures[l.base] : null, l.normal >= 0 ? textures[l.normal] : null]);
         const name = (m.name || '').toLowerCase();
         m.water = /water|ocean|lake|river|pond|\bsea\b|suv|daryo|ko'l/.test(name);
         const emissive = (m.emissionStrength || 0) > 0.05 && Math.max(...m.emission) > 0.05;
         // Procedural micro detail breaks up flat, untextured surfaces (stone, ground, walls).
-        m.detail = !this.settings.surfaceDetail || m.blend || m.water || m.character ? 0 : emissive ? 0.2 : m.baseColorTexture >= 0 ? 0.35 : 1;
+        m.detail = !this.settings.surfaceDetail || m.blend || m.water || m.character || m.terrain || m.foliage ? 0 : m.triplanar ? 0.3 : emissive ? 0.2 : m.baseColorTexture >= 0 ? 0.35 : 1;
       }
       if (!this.materials.length) this.materials.push({ baseColor: [0.8, 0.8, 0.8, 1], metallic: 0, roughness: 0.6, emission: [0, 0, 0], emissionStrength: 0, normalStrength: 1, blend: false, doubleSided: true, gpuTextures: [null, null, null, null], index: 0 });
       this.meshes = d.meshes.map((m, i) => {
@@ -3185,15 +3484,22 @@ void main() {
         env.ground = vScale(c, 0.45);
         env.ambient = 1;
       }
+      if (world.environment && this.settings.sky !== 'PROCEDURAL') {
+        // HDRI world (Blender Environment Texture): image based lighting and an HDRI sky.
+        if (!this.renderer.env) this.envColors = this.renderer.setEnvironment(Object.assign({ strength: world.strength }, world.environment), this.buffer);
+        Object.assign(env, this.envColors, { ambient: 1, sunDisk: false, skyIntensity: 1 });
+        this.skyMode = 'HDRI';
+        this.envSunDir = world.environment.sunDir ? vNorm(world.environment.sunDir) : null;
+      }
       env.fogColor = env.horizon.slice();
-      env.clouds = this.settings.clouds && mode === 'PROCEDURAL' ? 0.6 : 0;
+      env.clouds = this.settings.clouds && mode === 'PROCEDURAL' && this.skyMode !== 'HDRI' ? 0.6 : 0;
       this.env = env;
     }
 
     // Instanced grass on green, upward-facing static ground. Placement is seeded, so every run matches.
     setupGrass() {
       const st = this.settings;
-      const budgets = { OFF: 0, LOW: 0, MEDIUM: 14000, HIGH: 32000, ULTRA: 64000 };
+      const budgets = { OFF: 0, LOW: 0, MEDIUM: 24000, HIGH: 60000, ULTRA: 110000 };
       let budget = st.grass === 'AUTO' || st.grass === true ? budgets[st.shadowQuality] || 0 : +st.grass || 0;
       if (this.isTouch) budget = Math.min(budget, 12000);
       if (!budget || !this.renderer.hdr) return;
@@ -3208,8 +3514,8 @@ void main() {
         for (const prim of n.mesh.primitives) {
           const m = this.materials[prim.material];
           if (!m || m.blend || m.water) continue;
-          const bc = m.baseColor;
-          if (!(bc[1] > bc[0] * 1.12 && bc[1] > bc[2] * 1.12) || blocked.test((m.name || '').toLowerCase())) continue;
+          const bc = m.terrain ? [0.2, 0.3, 0.1, 1] : m.baseColor;
+          if (!m.terrain && (!(bc[1] > bc[0] * 1.12 && bc[1] > bc[2] * 1.12) || blocked.test((m.name || '').toLowerCase()))) continue;
           const pos = n.mesh.positions, idx = n.mesh.indices;
           for (let t = prim.first; t < prim.first + prim.count; t += 3) {
             const pa = M4.point(n.world, [pos[idx[t] * 3], pos[idx[t] * 3 + 1], pos[idx[t] * 3 + 2]]);
@@ -3217,7 +3523,7 @@ void main() {
             const pc = M4.point(n.world, [pos[idx[t + 2] * 3], pos[idx[t + 2] * 3 + 1], pos[idx[t + 2] * 3 + 2]]);
             const cr = vCross(vSub(pb, pa), vSub(pc, pa));
             const len = Math.hypot(cr[0], cr[1], cr[2]);
-            if (len < 1e-6 || cr[2] / len < 0.8) continue;
+            if (len < 1e-6 || cr[2] / len < (m.terrain ? 0.86 : 0.8)) continue;
             const area = len * 0.5;
             total += area;
             tris.push({ pa, pb, pc, area, cum: total });
@@ -3226,11 +3532,12 @@ void main() {
         }
       }
       if (!tris.length || total < 1) return;
-      const count = Math.min(budget, Math.round(total * 26));
+      const radius = st.grassRadius || 34;
+      const count = Math.min(budget, Math.round(Math.min(total, Math.PI * radius * radius) * 40));
       let seed = 1337;
       const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
       const blades = [];
-      for (let i = 0; i < count; i++) {
+      for (let attempt = 0; blades.length < count * 6 && attempt < count * 12; attempt++) {
         const target = rnd() * total;
         let lo = 0, hi = tris.length - 1;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (tris[mid].cum < target) lo = mid + 1; else hi = mid; }
@@ -3238,10 +3545,11 @@ void main() {
         let u = rnd(), v = rnd();
         if (u + v > 1) { u = 1 - u; v = 1 - v; }
         const p = [0, 1, 2].map((k) => tr.pa[k] + (tr.pb[k] - tr.pa[k]) * u + (tr.pc[k] - tr.pa[k]) * v);
+        if (Math.hypot(p[0], p[1]) > (st.grassRadius || 34)) continue;
         // Skip spots covered by other geometry (rocks, buildings, props).
         const hit = this.world.raycast([p[0], p[1], p[2] + 0.05], [0, 0, 1], 2.5);
         if (hit) continue;
-        blades.push(p[0], p[1], p[2] - 0.02, rnd() * Math.PI * 2, 0.22 + rnd() * 0.3, rnd());
+        blades.push(p[0], p[1], p[2] - 0.02, rnd() * Math.PI * 2, 0.12 + rnd() * rnd() * 0.32, rnd());
       }
       const n = blades.length / 6;
       if (!n) return;
@@ -4799,6 +5107,7 @@ void main() {
       const sun = this.sunNode && this.sunNode.alive
         ? { dir: vNorm(M4.dir(this.sunNode.world, [0, 0, 1])), color: this.sunNode.src.light.color, intensity: this.sunNode.src.light.intensity }
         : { dir: [0.3, -0.4, 0.86], color: [1, 1, 1], intensity: 0 };
+      if (this.envSunDir && this.settings.sunFromHdri !== false && this.envSunDir[2] > 0.02) sun.dir = this.envSunDir;
       const camPos = this.camPos || [world[12], world[13], world[14]];
       const fwd = this.camForward || [0, 1, 0];
       const R = this.renderer.shadowRadius;

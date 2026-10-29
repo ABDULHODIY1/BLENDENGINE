@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "tree_dead",
+ "source": "Red Eclipse 1.6 data/vegetation/tree02/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 7.0,
+ "surfaces": [
+  {
+   "name": "Mesh",
+   "kind": "bark",
+   "vertexCount": 306,
+   "position": 0,
+   "normal": 3680,
+   "uv": 7360,
+   "index": 9808,
+   "indexCount": 1605,
+   "textures": {
+    "base": "../textures/vegetation_skin_dead.png",
+    "normal": "../textures/vegetation_skin_dead_n.png"
+   }
+  }
+ ]
+}

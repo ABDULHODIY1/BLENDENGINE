@@ -152,7 +152,21 @@ const MAX_SECONDS = +(maxSecondsArg || 150);
       if (interact) inp.virtualPressed.add('INTERACT');
       const moving = inp.virtual.has('MOVE_FORWARD') || inp.virtual.has('MOVE_LEFT') || inp.virtual.has('MOVE_RIGHT') || inp.virtual.has('MOVE_BACKWARD');
       if (bot.last && Math.hypot(pos[0] - bot.last[0], pos[1] - bot.last[1]) < 0.015 && moving) bot.stuck += dt; else bot.stuck = 0;
-      if (bot.stuck > 0.6) { inp.virtualPressed.add('JUMP'); bot.detour = 0.9; bot.detourDir = -bot.detourDir || 1; bot.stuck = 0; }
+      if (bot.stuck > 0.6) {
+        inp.virtualPressed.add('JUMP'); bot.detour = 0.9; bot.detourDir = -bot.detourDir || 1; bot.stuck = 0;
+        bot.stuckCount = (bot.stuckCount || 0) + 1;
+        // Repeatedly stuck: back off in a random direction for a moment.
+        if (bot.stuckCount > 2) { bot.escape = 1.4; bot.escapeYaw = g.camYaw + Math.PI + (Math.random() - 0.5) * 2.4; bot.stuckCount = 0; }
+      }
+      if (bot.escape > 0) {
+        bot.escape -= dt;
+        for (const k of ['MOVE_FORWARD', 'MOVE_BACKWARD', 'MOVE_LEFT', 'MOVE_RIGHT']) inp.virtual.delete(k);
+        const rel = wrap(bot.escapeYaw - g.camYaw);
+        if (Math.cos(rel) > 0.38) inp.virtual.add('MOVE_FORWARD');
+        if (Math.cos(rel) < -0.38) inp.virtual.add('MOVE_BACKWARD');
+        if (Math.sin(rel) > 0.38) inp.virtual.add('MOVE_LEFT');
+        if (Math.sin(rel) < -0.38) inp.virtual.add('MOVE_RIGHT');
+      }
       bot.last = pos.slice();
     }
     const update = g.update.bind(g);

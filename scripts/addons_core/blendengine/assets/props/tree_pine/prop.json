@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "tree_pine",
+ "source": "Red Eclipse 1.6 data/vegetation/tree03/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 11.0,
+ "surfaces": [
+  {
+   "name": "bark",
+   "kind": "bark",
+   "vertexCount": 57,
+   "position": 0,
+   "normal": 688,
+   "uv": 1376,
+   "index": 1840,
+   "indexCount": 126,
+   "textures": {
+    "base": "../textures/vegetation_skin_evergreen.png",
+    "normal": "../textures/vegetation_skin_evergreen_n.png"
+   }
+  },
+  {
+   "name": "leaves",
+   "kind": "foliage",
+   "vertexCount": 119,
+   "position": 2352,
+   "normal": 3792,
+   "uv": 5232,
+   "index": 6192,
+   "indexCount": 336,
+   "textures": {
+    "base": "../textures/vegetation_skin_evergreen.png",
+    "normal": "../textures/vegetation_skin_evergreen_n.png"
+   }
+  }
+ ]
+}

@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "barrel",
+ "source": "Red Eclipse 1.6 data/jojo/barrel01/tris.obj",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 1.0,
+ "surfaces": [
+  {
+   "name": "mesh",
+   "kind": "opaque",
+   "vertexCount": 44,
+   "position": 0,
+   "normal": 528,
+   "uv": 1056,
+   "index": 1408,
+   "indexCount": 132,
+   "textures": {
+    "base": "../textures/jojo_barrel01_skin.png",
+    "normal": "../textures/jojo_barrel01_normal.png"
+   }
+  }
+ ]
+}

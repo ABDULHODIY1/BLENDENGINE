@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "gas_tank",
+ "source": "Red Eclipse 1.6 data/nobiax/gaz_tank/gaz.obj",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 1.3,
+ "surfaces": [
+  {
+   "name": "Default",
+   "kind": "opaque",
+   "vertexCount": 562,
+   "position": 0,
+   "normal": 6752,
+   "uv": 13504,
+   "index": 18000,
+   "indexCount": 2436,
+   "textures": {
+    "base": "../textures/nobiax_gaz_tank_diffus.png",
+    "normal": "../textures/nobiax_gaz_tank_normal.png"
+   }
+  }
+ ]
+}

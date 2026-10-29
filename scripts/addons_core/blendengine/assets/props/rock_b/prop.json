@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "rock_b",
+ "source": "Red Eclipse 1.6 data/unnamed/rocks/rock02/rock02.obj",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 2.2,
+ "surfaces": [
+  {
+   "name": "slot859",
+   "kind": "opaque",
+   "vertexCount": 172,
+   "position": 0,
+   "normal": 2064,
+   "uv": 4128,
+   "index": 5504,
+   "indexCount": 702,
+   "textures": {
+    "base": "../textures/unnamed_stone01-a.png",
+    "normal": "../textures/unnamed_stone01-a_n.png"
+   }
+  }
+ ]
+}

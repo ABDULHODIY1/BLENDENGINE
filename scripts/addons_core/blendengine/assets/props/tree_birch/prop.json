@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "tree_birch",
+ "source": "Red Eclipse 1.6 data/vegetation/tree05/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 8.0,
+ "surfaces": [
+  {
+   "name": "bark",
+   "kind": "bark",
+   "vertexCount": 204,
+   "position": 0,
+   "normal": 2448,
+   "uv": 4896,
+   "index": 6528,
+   "indexCount": 816,
+   "textures": {
+    "base": "../textures/vegetation_skin_green4.png",
+    "normal": "../textures/vegetation_skin_green4_n.png"
+   }
+  },
+  {
+   "name": "leaves",
+   "kind": "foliage",
+   "vertexCount": 192,
+   "position": 9792,
+   "normal": 12096,
+   "uv": 14400,
+   "index": 15936,
+   "indexCount": 288,
+   "textures": {
+    "base": "../textures/vegetation_skin_green4.png",
+    "normal": "../textures/vegetation_skin_green4_n.png"
+   }
+  }
+ ]
+}

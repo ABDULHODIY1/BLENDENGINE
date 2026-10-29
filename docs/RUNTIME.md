@@ -37,6 +37,10 @@ Chrome, Edge, Firefox, Safari, Android WebView va iOS WKWebView'da. Runtime bitt
 - HDR pipeline: bloom, SSAO, ACES tone mapping, vinyetka, FXAA.
 - Real-time optimizatsiyalar: frustum culling, ekranda 1 pikseldan kichik obyektlarni o'tkazib yuborish, material bo'yicha saralash, bir xil geometriya eksportda bitta mesh'ga birlashtiriladi va **GPU instancing** bilan bitta draw call'da chiziladi (sahna va soya pass'larida), soyada mayda obyektlar tashlab yuboriladi, uzoq soya kaskadi kamroq yangilanadi, dinamik resolution (FPS tushsa avtomatik pasayadi).
 
+**HDRI va materiallar**
+- World'da Environment Texture bo'lsa (masalan Blender'ning `studiolights/world/forest.exr`), runtime undan atrof yoritilishi (SH9 + GGX mip zanjiri) va osmon yasaydi; quyosh yo'nalishi HDRI'dagi quyoshga moslanadi. Rang tasviri: AgX (`settings.toneMapper = 'ACES'` bilan eski egri).
+- Material custom property'lari: `be_triplanar` (UV'siz dunyo proyeksiyasi, metr/plitka), `be_foliage` (alpha-test, ikki tomonlama, shamol), `be_terrain` (3 qatlam: o't, dog'lar, qiyalikda tosh). Yordamchilar: `characters.surface_material`, `terrain_material`, `hdri_world`, `add_prop`.
+
 **Animatsiyali qahramonlar** (`assets/characters`, `characters.py`)
 - GPU skinning (suyak matritsalari float teksturada), qatlamli animatsiya: oyoqlar harakatni (yurish/yugurish/yon qadam/orqaga), tana qurolni (nishon, otish, qayta o'qlash) o'ynaydi; nishonga qarab egilish, o'lish animatsiyasi.
 - Qurol ikki qo'lga avtomatik moslanadi; boshga tegish (headshot) uchun alohida hitbox.

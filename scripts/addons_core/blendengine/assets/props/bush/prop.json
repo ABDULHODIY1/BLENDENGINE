@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "bush",
+ "source": "Red Eclipse 1.6 data/vegetation/bush01/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 1.4,
+ "surfaces": [
+  {
+   "name": "Mesh",
+   "kind": "foliage",
+   "vertexCount": 150,
+   "position": 0,
+   "normal": 1808,
+   "uv": 3616,
+   "index": 4816,
+   "indexCount": 576,
+   "textures": {
+    "base": "../textures/vegetation_skin_bush1.png",
+    "normal": "../textures/vegetation_skin_bush1_n.png"
+   }
+  }
+ ]
+}

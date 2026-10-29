@@ -1,0 +1,24 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "cardboard_box",
+ "source": "Red Eclipse 1.6 data/nobiax/cardboardbox1/model.obj",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 0.45,
+ "surfaces": [
+  {
+   "name": "box_closed",
+   "kind": "opaque",
+   "vertexCount": 144,
+   "position": 0,
+   "normal": 1728,
+   "uv": 3456,
+   "index": 4608,
+   "indexCount": 204,
+   "textures": {
+    "base": "../textures/nobiax_cardboardbox1_diffus.png",
+    "normal": "../textures/nobiax_cardboardbox1_normal.png"
+   }
+  }
+ ]
+}

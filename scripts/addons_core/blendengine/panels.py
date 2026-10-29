@@ -335,6 +335,7 @@ def _draw_component_tools(layout):
     op = row.operator("blendengine.add_character", text="Female", icon="OUTLINER_OB_ARMATURE")
     op.character = "re_soldier_female"
     op.weapon = "smg"
+    layout.operator_menu_enum("blendengine.add_prop", "prop", text="Add Tree / Rock / Prop", icon="OUTLINER_OB_FORCE_FIELD")
     layout.label(text="Add Component", icon="ADD")
     grid = _grid(layout, 2)
     grid.operator("blendengine.add_player_controller", text="Player", icon="OUTLINER_OB_ARMATURE")

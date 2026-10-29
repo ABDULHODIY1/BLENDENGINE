@@ -4,6 +4,9 @@
 
 ### Engine
 
+- **Haqiqiyroq grafika:** Blender HDRI'lari bilan image-based lighting (SH9 diffuz + GGX prefiltrlangan aks-sado), HDRI osmon, quyosh HDRI bilan moslanadi, AgX rang tasviri (Blender'dagi kabi); relyef materiali (o't / quruq o't / tosh qiyaliklar, normal map'lar), triplanar materiallar, shamolda tebranuvchi barglar, barg shaklidagi soyalar.
+- **Asset kutubxonasi:** 14 ta prop (6 xil daraxt, buta, o'tlar, toshlar, bochka, gaz ballon, poddon, quti) va 11 ta sirt teksturasi (Red Eclipse, CC-BY-SA) — `tools/compile_props.py`, Create → *Add Tree / Rock / Prop*.
+- **Kristall Vodiysi:** tepaliklar bilan o'ralgan vodiy, o'rmon, tosh xarobalar, HDRI yorug'lik.
 - **Animatsiyali askarlar va otishma:** skelet animatsiya (GPU skinning, qatlamli kliplar, nishonga olish), 2 tana × 8 forma × 4 qurol, masofadan otuvchi squad AI, headshot, sog'liq tiklanishi, o'q-dori/qayta o'qlash. Kristall Vodiysi — third-person shooter.
 - **Kino darajasidagi realtime render:** TAA + temporal upscaling, SSR, volumetric yorug'lik, kontakt soyalar; VFX: tracer, muzzle flash yorug'ligi, uchqun, qon, gilza, tutun, decal, kamera silkinishi.
 - **Build Game = haqiqiy o'yin:** `.exe` (Windows), Linux dasturi, macOS `.app`, bitta faylli `<Game>.html` va web ZIP; build tugashi bilan o'yin ochiladi. `.blend`/`.py` fayllar faqat so'ralganda (`launchers/launcher.c`, `game_package.py`).

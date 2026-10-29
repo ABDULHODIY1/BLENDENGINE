@@ -195,6 +195,161 @@ def add_character(context, ident, name, location=(0.0, 0.0, 0.0), yaw=0.0, varia
     return obj
 
 
+# -----------------------------------------------------------------------------
+# Static props (trees, bushes, rocks, barrels) and surface materials
+
+
+def available_props():
+    folder = os.path.join(ASSET_DIR, "props")
+    if not os.path.isdir(folder):
+        return []
+    return sorted(d for d in os.listdir(folder) if os.path.isfile(os.path.join(folder, d, "prop.json")))
+
+
+def load_prop(ident):
+    key = ("props", ident)
+    if key not in _CACHE:
+        folder = os.path.join(ASSET_DIR, "props", ident)
+        with open(os.path.join(folder, "prop.json"), encoding="utf-8") as handle:
+            info = json.load(handle)
+        with open(os.path.join(folder, "prop.bin"), "rb") as handle:
+            blob = handle.read()
+        _CACHE[key] = (folder, info, blob)
+    return _CACHE[key]
+
+
+def _prop_material(folder, surface):
+    t = surface["textures"]
+    base = os.path.normpath(os.path.join(folder, t["base"]))
+    normal = os.path.normpath(os.path.join(folder, t["normal"])) if t.get("normal") else None
+    kind = surface.get("kind", "opaque")
+    name = "BE_Prop_%s_%s" % (os.path.splitext(os.path.basename(base))[0], kind)
+    material = bpy.data.materials.get(name)
+    if material is not None:
+        return material
+    material = _material(name, base, normal)
+    bsdf = next(n for n in material.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Roughness"].default_value = 0.85
+    if kind == "foliage":
+        image_node = bsdf.inputs["Base Color"].links[0].from_node
+        material.node_tree.links.new(image_node.outputs["Alpha"], bsdf.inputs["Alpha"])
+        material.blend_method = "CLIP"
+        material["be_foliage"] = 1.0
+        material.use_backface_culling = False
+    return material
+
+
+def prop_mesh(ident):
+    """Shared mesh for a prop: every placement is a linked duplicate (GPU instancing)."""
+    import numpy as np
+    name = "BE_Prop_%s" % ident
+    mesh = bpy.data.meshes.get(name)
+    if mesh is not None:
+        return mesh
+    folder, info, blob = load_prop(ident)
+    positions, uvs, indices, slots = [], [], [], []
+    offset = 0
+    for slot, surf in enumerate(info["surfaces"]):
+        count = surf["vertexCount"]
+        positions.append(_array(blob, surf["position"], np.float32, count * 3).reshape(-1, 3))
+        uvs.append(_array(blob, surf["uv"], np.float32, count * 2).reshape(-1, 2))
+        tris = _array(blob, surf["index"], np.uint32, surf["indexCount"]).astype(np.int64).reshape(-1, 3) + offset
+        indices.append(tris)
+        slots.append(np.full(len(tris), slot))
+        offset += count
+    mesh = _mesh_from_arrays(name, np.concatenate(positions), np.concatenate(uvs), np.concatenate(indices))
+    for surf in info["surfaces"]:
+        mesh.materials.append(_prop_material(folder, surf))
+    mesh.polygons.foreach_set("material_index", np.concatenate(slots).astype(np.int32))
+    mesh.update()
+    return mesh
+
+
+def add_prop(context, ident, name, location=(0.0, 0.0, 0.0), yaw=0.0, scale=1.0):
+    obj = bpy.data.objects.new(name, prop_mesh(ident))
+    context.scene.collection.objects.link(obj)
+    obj.location = location
+    obj.rotation_euler = (0.0, 0.0, yaw)
+    obj.scale = (scale, scale, scale)
+    obj["be_prop"] = ident
+    return obj
+
+
+def texture_path(name, normal=False):
+    return os.path.join(ASSET_DIR, "textures", name + ("_n.png" if normal else ".png"))
+
+
+def surface_material(name, texture, tile_metres=2.0, roughness=0.8, tint=(1.0, 1.0, 1.0)):
+    """World-projected (triplanar) material using an engine surface texture: no UVs needed."""
+    material = bpy.data.materials.get(name)
+    if material is not None:
+        return material
+    normal = texture_path(texture, True)
+    material = _material(name, texture_path(texture), normal if os.path.isfile(normal) else None)
+    bsdf = next(n for n in material.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Roughness"].default_value = roughness
+    material.diffuse_color = (*tint, 1.0)
+    material["be_triplanar"] = float(tile_metres)
+    return material
+
+
+def terrain_material(name, layers):
+    """Terrain material: layers = [(texture, tile metres)] for grass, dirt patches and rock slopes."""
+    material = bpy.data.materials.get(name)
+    if material is not None:
+        return material
+    first = layers[0][0]
+    normal = texture_path(first, True)
+    material = _material(name, texture_path(first), normal if os.path.isfile(normal) else None)
+    bsdf = next(n for n in material.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Roughness"].default_value = 0.92
+    material["be_terrain"] = json.dumps([{"texture": t, "scale": float(sc)} for t, sc in layers])
+    return material
+
+
+def hdri_world(scene, name="forest", strength=1.0, rotation=0.0):
+    """Use one of Blender's bundled HDRIs (studiolights/world, CC0) as the world: lighting + sky."""
+    path = os.path.join(bpy.utils.system_resource("DATAFILES", path="studiolights/world"), name + ".exr")
+    world = scene.world or bpy.data.worlds.new("World")
+    scene.world = world
+    world.use_nodes = True
+    tree = world.node_tree
+    tree.nodes.clear()
+    out = tree.nodes.new("ShaderNodeOutputWorld")
+    bg = tree.nodes.new("ShaderNodeBackground")
+    env = tree.nodes.new("ShaderNodeTexEnvironment")
+    env.image = bpy.data.images.load(path, check_existing=True)
+    if rotation:
+        coords = tree.nodes.new("ShaderNodeTexCoord")
+        mapping = tree.nodes.new("ShaderNodeMapping")
+        mapping.inputs["Rotation"].default_value[2] = rotation
+        tree.links.new(coords.outputs["Generated"], mapping.inputs["Vector"])
+        tree.links.new(mapping.outputs["Vector"], env.inputs["Vector"])
+    bg.inputs["Strength"].default_value = strength
+    tree.links.new(env.outputs["Color"], bg.inputs["Color"])
+    tree.links.new(bg.outputs["Background"], out.inputs["Surface"])
+    return env.image
+
+
+class BLENDENGINE_OT_add_prop(bpy.types.Operator):
+    bl_idname = "blendengine.add_prop"
+    bl_label = "Add Prop"
+    bl_description = "Add a textured tree, bush, rock or prop (linked duplicates are GPU instanced)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    prop: bpy.props.EnumProperty(name="Prop", items=lambda self, ctx: [(p, p.replace("_", " ").title(), "") for p in available_props()] or [("", "None", "")])
+
+    def execute(self, context):
+        if not self.prop:
+            return {"CANCELLED"}
+        obj = add_prop(context, self.prop, "BE_%s" % self.prop, context.scene.cursor.location.copy())
+        for other in context.selected_objects:
+            other.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        return {"FINISHED"}
+
+
 class BLENDENGINE_OT_add_character(bpy.types.Operator):
     bl_idname = "blendengine.add_character"
     bl_label = "Add Character"
@@ -217,7 +372,7 @@ class BLENDENGINE_OT_add_character(bpy.types.Operator):
         return {"FINISHED"}
 
 
-classes = (BLENDENGINE_OT_add_character,)
+classes = (BLENDENGINE_OT_add_character, BLENDENGINE_OT_add_prop)
 
 
 def register():

@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "tree_dry",
+ "source": "Red Eclipse 1.6 data/vegetation/tree00/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 9.5,
+ "surfaces": [
+  {
+   "name": "bark",
+   "kind": "bark",
+   "vertexCount": 408,
+   "position": 0,
+   "normal": 4896,
+   "uv": 9792,
+   "index": 13056,
+   "indexCount": 1632,
+   "textures": {
+    "base": "../textures/vegetation_skin_dieing.png",
+    "normal": "../textures/vegetation_skin_dieing_n.png"
+   }
+  },
+  {
+   "name": "leaves",
+   "kind": "foliage",
+   "vertexCount": 352,
+   "position": 19584,
+   "normal": 23808,
+   "uv": 28032,
+   "index": 30848,
+   "indexCount": 528,
+   "textures": {
+    "base": "../textures/vegetation_skin_dieing.png",
+    "normal": "../textures/vegetation_skin_dieing_n.png"
+   }
+  }
+ ]
+}

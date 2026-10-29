@@ -1,0 +1,38 @@
+{
+ "format": "BlendEngineProp",
+ "version": 1,
+ "id": "tree_oak",
+ "source": "Red Eclipse 1.6 data/vegetation/tree09/tris.md3",
+ "license": "CC-BY-SA 3.0, Red Eclipse Team and contributors (redeclipse.net)",
+ "height": 9.0,
+ "surfaces": [
+  {
+   "name": "bark",
+   "kind": "bark",
+   "vertexCount": 732,
+   "position": 0,
+   "normal": 8784,
+   "uv": 17568,
+   "index": 23424,
+   "indexCount": 2448,
+   "textures": {
+    "base": "../textures/vegetation_skin_green3.png",
+    "normal": "../textures/vegetation_skin_green3_n.png"
+   }
+  },
+  {
+   "name": "leaves",
+   "kind": "foliage",
+   "vertexCount": 224,
+   "position": 33216,
+   "normal": 35904,
+   "uv": 38592,
+   "index": 40384,
+   "indexCount": 336,
+   "textures": {
+    "base": "../textures/vegetation_skin_green3.png",
+    "normal": "../textures/vegetation_skin_green3_n.png"
+   }
+  }
+ ]
+}
