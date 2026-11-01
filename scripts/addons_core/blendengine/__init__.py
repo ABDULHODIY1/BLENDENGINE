@@ -85,11 +85,29 @@ _REGISTER_MODULES = (
 )
 
 
+@bpy.app.handlers.persistent
+def _reset_session_flags(_dummy=None):
+    # Flags saved in a .blend describe a previous Blender session, not this one.
+    from . import operators as _operators
+    _operators._GUARD_RUNNING = False
+    for scene in bpy.data.scenes:
+        editor = getattr(scene, "blendengine_editor", None)
+        if editor is not None:
+            editor.input_lock_running = False
+        project = getattr(scene, "blendengine_project", None)
+        if project is not None and project.test_running:
+            project.test_running = False
+
+
 def register():
     for module in _REGISTER_MODULES:
         module.register()
+    if _reset_session_flags not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_reset_session_flags)
 
 
 def unregister():
+    if _reset_session_flags in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_reset_session_flags)
     for module in reversed(_REGISTER_MODULES):
         module.unregister()

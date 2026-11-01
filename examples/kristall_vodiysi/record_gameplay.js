@@ -82,6 +82,75 @@ const MAX_SECONDS = +(maxSecondsArg || 150);
       }
       return best;
     }
+    // Navigation grid (0.5 m cells over the valley): blocked where a knee-high probe hits
+    // geometry or where lava burns. A* gives waypoints around walls, crates and the lava pool.
+    const NAV = { cell: 0.5, half: 24, n: 96, blocked: null };
+    (function buildNav() {
+      NAV.blocked = new Uint8Array(NAV.n * NAV.n);
+      const lb = lavaBox;
+      for (let j = 0; j < NAV.n; j++) for (let i = 0; i < NAV.n; i++) {
+        const x = -NAV.half + (i + 0.5) * NAV.cell, y = -NAV.half + (j + 0.5) * NAV.cell;
+        let b = 0;
+        if (lb && x > lb.min[0] - 0.8 && x < lb.max[0] + 0.8 && y > lb.min[1] - 0.8 && y < lb.max[1] + 0.8) b = 1;
+        const top = g.world.raycast([x, y, 6], [0, 0, -1], 12);
+        const ground = top ? top.point[2] : 0;
+        // Something solid between knee and head height over this cell?
+        for (const dz of [0.5, 1.1]) {
+          if (b) break;
+          for (const [ox, oy] of [[0.35, 0], [-0.35, 0], [0, 0.35], [0, -0.35]]) {
+            const h = g.world.raycast([x - ox, y - oy, ground + dz], [ox / 0.35, oy / 0.35, 0], 0.7);
+            if (h && h.normal[2] < 0.6) { b = 1; break; }
+          }
+        }
+        if (top && top.normal[2] < 0.6) b = 1;
+        NAV.blocked[j * NAV.n + i] = b;
+      }
+    })();
+    const cellOf = (p) => [Math.max(0, Math.min(NAV.n - 1, Math.floor((p[0] + NAV.half) / NAV.cell))), Math.max(0, Math.min(NAV.n - 1, Math.floor((p[1] + NAV.half) / NAV.cell)))];
+    function findPath(from, to) {
+      const [si, sj] = cellOf(from), [ti, tj] = cellOf(to), n = NAV.n;
+      const start = sj * n + si, goal = tj * n + ti;
+      const gScore = new Float32Array(n * n).fill(Infinity), came = new Int32Array(n * n).fill(-1);
+      const open = [[0, start]];
+      gScore[start] = 0;
+      const h = (k) => Math.hypot((k % n) - ti, Math.floor(k / n) - tj);
+      let found = false, steps = 0;
+      while (open.length && steps++ < 20000) {
+        let bi = 0;
+        for (let k = 1; k < open.length; k++) if (open[k][0] < open[bi][0]) bi = k;
+        const [, cur] = open.splice(bi, 1)[0];
+        if (cur === goal) { found = true; break; }
+        const ci = cur % n, cj = Math.floor(cur / n);
+        for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+          if (!di && !dj) continue;
+          const ni = ci + di, nj = cj + dj;
+          if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+          const nk = nj * n + ni;
+          if (NAV.blocked[nk] && nk !== goal) continue;
+          if (di && dj && (NAV.blocked[cj * n + ni] || NAV.blocked[nj * n + ci])) continue;
+          const t = gScore[cur] + (di && dj ? 1.414 : 1);
+          if (t < gScore[nk]) { gScore[nk] = t; came[nk] = cur; open.push([t + h(nk), nk]); }
+        }
+      }
+      if (!found) return null;
+      const path = [];
+      for (let k = goal; k !== -1 && k !== start; k = came[k]) path.push([-NAV.half + ((k % n) + 0.5) * NAV.cell, -NAV.half + (Math.floor(k / n) + 0.5) * NAV.cell, 0]);
+      return path.reverse();
+    }
+    function waypoint(pos, target) {
+      const key = Math.round(target[0] * 2) + ',' + Math.round(target[1] * 2);
+      if (!bot.path || bot.pathKey !== key || bot.pathAge > 3) { bot.path = findPath(pos, target); bot.pathKey = key; bot.pathAge = 0; }
+      if (!bot.path || !bot.path.length) return target;
+      while (bot.path.length > 1 && Math.hypot(bot.path[0][0] - pos[0], bot.path[0][1] - pos[1]) < 0.6) bot.path.shift();
+      // Skip ahead to the farthest waypoint still in a straight, free line.
+      let k = 0;
+      for (let i = Math.min(bot.path.length - 1, 6); i > 0; i--) {
+        const w = bot.path[i], d = [w[0] - pos[0], w[1] - pos[1]], l = Math.hypot(d[0], d[1]);
+        const hit = g.world.raycast([pos[0], pos[1], pos[2] + 0.6], [d[0] / l, d[1] / l, 0], l);
+        if (!hit || hit.normal[2] > 0.6) { k = i; break; }
+      }
+      return bot.path[k];
+    }
     const keys = g.input.keys;
     function step(dt) {
       const p = g.player, inp = g.input;
@@ -130,8 +199,9 @@ const MAX_SECONDS = +(maxSecondsArg || 150);
           g.camPitch += (-0.12 - g.camPitch) * Math.min(1, dt * 3);
         }
       }
+      bot.pathAge = (bot.pathAge || 0) + dt;
       if (moveTarget && !interact) {
-        moveTarget = avoidLava(pos, moveTarget);
+        moveTarget = waypoint(pos, moveTarget);
         const dx = moveTarget[0] - pos[0], dy = moveTarget[1] - pos[1];
         const dist = Math.hypot(dx, dy);
         if (dist > 0.5) {
@@ -178,7 +248,7 @@ const MAX_SECONDS = +(maxSecondsArg || 150);
   let endFrames = -1;
   for (let i = 0; i < total; i++) {
     await page.evaluate((ms) => window.__tick(ms), 1000 / FPS);
-    await page.screenshot({ path: path.join(framesDir, 'f_' + String(i).padStart(5, '0') + '.jpg'), type: 'jpeg', quality: 90 });
+    if (!process.env.BE_NOSHOT) await page.screenshot({ path: path.join(framesDir, 'f_' + String(i).padStart(5, '0') + '.jpg'), type: 'jpeg', quality: 90 });
     if (i % 30 === 0) {
       const s = await page.evaluate(() => {
         const g = BlendEngine.game, p = g.player;

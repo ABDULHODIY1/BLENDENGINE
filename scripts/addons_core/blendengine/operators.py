@@ -601,6 +601,34 @@ class BE_OT_animation_transition_remove(Operator):
         return {"FINISHED"}
 
 
+_MOUSE_EVENTS = {
+    "LEFTMOUSE", "MIDDLEMOUSE", "RIGHTMOUSE", "BUTTON4MOUSE", "BUTTON5MOUSE", "BUTTON6MOUSE", "BUTTON7MOUSE",
+    "PEN", "ERASER", "MOUSEMOVE", "INBETWEEN_MOUSEMOVE", "TRACKPADPAN", "TRACKPADZOOM", "MOUSEROTATE",
+    "MOUSESMARTZOOM", "WHEELUPMOUSE", "WHEELDOWNMOUSE", "WHEELINMOUSE", "WHEELOUTMOUSE",
+}
+_SYSTEM_EVENTS = {"NONE", "WINDOW_DEACTIVATE", "TEXTINPUT", "TIMER", "TIMER0", "TIMER1", "TIMER2", "TIMER_JOBS",
+                  "TIMER_AUTOSAVE", "TIMER_REPORT", "TIMERREGION"}
+
+
+def _is_keyboard_event(event):
+    t = event.type
+    return not (t in _MOUSE_EVENTS or t in _SYSTEM_EVENTS or t.startswith(("NDOF", "ACTIONZONE", "XR_", "TIMER", "EVT_")))
+
+
+def _event_over_game_view(context, event):
+    """True when the mouse is over a 3D viewport's main region (the game view)."""
+    screen = context.window.screen if context.window else None
+    if screen is None:
+        return False
+    for area in screen.areas:
+        if area.type != "VIEW_3D":
+            continue
+        for region in area.regions:
+            if region.type == "WINDOW" and region.x <= event.mouse_x < region.x + region.width and region.y <= event.mouse_y < region.y + region.height:
+                return True
+    return False
+
+
 class BE_OT_test_run_scene(Operator):
     bl_idname = "blendengine.test_run_scene"
     bl_label = "Test Run Current Scene"
@@ -624,6 +652,7 @@ class BE_OT_test_run_scene(Operator):
 
         self._timer = context.window_manager.event_timer_add(1.0 / 60.0, window=context.window)
         context.window_manager.modal_handler_add(self)
+        ensure_input_guard(context)
         if result.warnings:
             self.report({"WARNING"}, result.summary())
         else:
@@ -644,10 +673,26 @@ class BE_OT_test_run_scene(Operator):
                 return self._finish(context, "Stopped")
             return {"PASS_THROUGH"}
 
-        if event.value in {"PRESS", "RELEASE"}:
-            if self._session.handle_event(event):
-                return {"RUNNING_MODAL"}
+        if event.type == "WINDOW_DEACTIVATE":
+            # Alt-tab while holding a key must not leave the player running forever.
+            self._session.input_state.clear()
+            return {"PASS_THROUGH"}
 
+        # While the game runs, Blender must never see gameplay input: every key (W/A/S/D
+        # would otherwise scale, delete or move objects) and every mouse action over the
+        # game view (selection, orbit, wheel zoom) is consumed here. Mouse input over panels
+        # and headers still works, so the Stop button stays usable.
+        if _is_keyboard_event(event):
+            if event.value in {"PRESS", "RELEASE"}:
+                self._session.handle_event(event)
+            return {"RUNNING_MODAL"}
+        if event.type in _MOUSE_EVENTS or event.type.startswith("NDOF"):
+            if _event_over_game_view(context, event):
+                if event.value in {"PRESS", "RELEASE"}:
+                    self._session.handle_event(event)
+                return {"RUNNING_MODAL"}
+            if event.value == "RELEASE":
+                self._session.handle_event(event)
         return {"PASS_THROUGH"}
 
     def _finish(self, context, status):
@@ -671,6 +716,24 @@ class BE_OT_stop_test_run(Operator):
         return {"FINISHED"}
 
 
+# The input guard runs for the whole session once a game was played. In the Play Mode
+# page it always keeps gameplay keys and mouse wheel/clicks over the game view away
+# from Blender (no accidental scaling, deleting or zooming after a run ends); in the
+# other BlendEngine pages it does so only while "Game Keys" is switched on.
+_GUARD_RUNNING = False
+
+
+def ensure_input_guard(context):
+    global _GUARD_RUNNING
+    if _GUARD_RUNNING or context.window is None:
+        return
+    try:
+        with context.temp_override(window=context.window):
+            bpy.ops.blendengine.editor_input_lock("INVOKE_DEFAULT", automatic=True)
+    except Exception as ex:  # never block starting a game because of the guard
+        print("[BlendEngine] Input guard not started: %s" % ex)
+
+
 class BE_OT_editor_input_lock(Operator):
     bl_idname = "blendengine.editor_input_lock"
     bl_label = "Game Input Lock"
@@ -683,47 +746,57 @@ class BE_OT_editor_input_lock(Operator):
         "UP_ARROW", "DOWN_ARROW", "LEFT_ARROW", "RIGHT_ARROW",
     }
 
+    automatic: bpy.props.BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
+
+    _play_events = _editor_events | {"LEFT_SHIFT", "RIGHT_SHIFT", "LEFT_CTRL", "C", "I", "P", "TAB", "DEL", "X", "G"}
+
     @classmethod
     def poll(cls, context):
         return context.window is not None and context.scene is not None
 
+    def invoke(self, context, event):
+        return self.execute(context)
+
     def execute(self, context):
+        global _GUARD_RUNNING
         editor = context.scene.blendengine_editor
-        if editor.input_lock_running:
-            self.report({"INFO"}, "BlendEngine input lock is already running.")
-            return {"FINISHED"}
-        editor.input_lock_enabled = True
+        if not self.automatic:
+            editor.input_lock_enabled = True
         editor.input_lock_running = True
+        if _GUARD_RUNNING:
+            if not self.automatic:
+                self.report({"INFO"}, "BlendEngine game keys enabled.")
+            return {"FINISHED"}
+        _GUARD_RUNNING = True
         context.window_manager.modal_handler_add(self)
-        self.report({"INFO"}, "BlendEngine game input lock enabled.")
+        if not self.automatic:
+            self.report({"INFO"}, "BlendEngine game input lock enabled.")
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
+        global _GUARD_RUNNING
         scene = context.scene
         if scene is None or not hasattr(scene, "blendengine_editor"):
+            _GUARD_RUNNING = False
             return {"FINISHED"}
-
         editor = scene.blendengine_editor
-        if not editor.input_lock_enabled:
-            editor.input_lock_running = False
-            return {"FINISHED"}
-
-        if event.type == "TIMER":
+        if event.type.startswith("TIMER") or scene.blendengine_project.test_running:
             return {"PASS_THROUGH"}
 
         workspace_name = context.window.workspace.name if context.window and context.window.workspace else ""
-        if workspace_name not in {"BlendEngine", "World Builder", "Logic Lab", "Play Mode"}:
+        play_page = workspace_name == "Play Mode"
+        if not play_page and (not editor.input_lock_enabled or workspace_name not in {"BlendEngine", "World Builder", "Logic Lab"}):
             return {"PASS_THROUGH"}
-
-        if scene.blendengine_project.test_running:
-            return {"PASS_THROUGH"}
-
         if event.ctrl or event.oskey or event.alt:
             return {"PASS_THROUGH"}
 
-        if event.value in {"PRESS", "RELEASE"} and event.type in self._editor_events:
+        values = {"PRESS", "RELEASE", "CLICK", "DOUBLE_CLICK", "CLICK_DRAG"}
+        keys = self._play_events if play_page else self._editor_events
+        if event.type in keys and event.value in values:
             return {"RUNNING_MODAL"}
-
+        # In Play Mode the view is the game camera: wheel and clicks must not zoom, pan or select.
+        if play_page and event.type in _MOUSE_EVENTS - {"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"} and _event_over_game_view(context, event):
+            return {"RUNNING_MODAL"}
         return {"PASS_THROUGH"}
 
 

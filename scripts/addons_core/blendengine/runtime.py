@@ -262,7 +262,93 @@ class GameSession:
         except Exception:
             return None
 
+    # -- Scene snapshot: a Test Run must never change the user's project. Everything the
+    # session can touch (transforms, visibility, variables, health, the active camera,
+    # spawned copies) is recorded on start and put back on stop.
+    def _capture_snapshot(self):
+        snapshot = {"objects": {}, "camera": self.scene.camera.name if self.scene.camera else None, "names": set()}
+        for obj in self.scene.objects:
+            snapshot["names"].add(obj.name)
+            state = {
+                "location": obj.location.copy(),
+                "rotation_mode": obj.rotation_mode,
+                "rotation_euler": obj.rotation_euler.copy(),
+                "rotation_quaternion": obj.rotation_quaternion.copy(),
+                "scale": obj.scale.copy(),
+                "hide_viewport": obj.hide_viewport,
+                "hide_render": obj.hide_render,
+                "hide": obj.hide_get() if hasattr(obj, "hide_get") else False,
+            }
+            settings = getattr(obj, "blendengine_object", None)
+            if settings is not None:
+                state["variables"] = [(v.bool_value, v.int_value, v.float_value, v.string_value) for v in settings.variables]
+                health = getattr(settings, "health", None)
+                if health is not None:
+                    state["health"] = health.current_health
+            snapshot["objects"][obj.name] = state
+        view = None
+        try:
+            for area in self.context.window.screen.areas:
+                if area.type == "VIEW_3D":
+                    r3d = area.spaces.active.region_3d
+                    view = (area.spaces.active, r3d.view_perspective, r3d.view_location.copy(), r3d.view_rotation.copy(), r3d.view_distance)
+                    break
+        except Exception:
+            view = None
+        snapshot["view"] = view
+        return snapshot
+
+    def _restore_snapshot(self):
+        snapshot = getattr(self, "_snapshot", None)
+        if not snapshot:
+            return
+        import bpy
+        # Remove objects spawned during play.
+        for obj in list(self.scene.objects):
+            if obj.name not in snapshot["names"]:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                except Exception:
+                    pass
+        for name, state in snapshot["objects"].items():
+            obj = self.scene.objects.get(name)
+            if obj is None:
+                continue
+            try:
+                obj.location = state["location"]
+                obj.rotation_mode = state["rotation_mode"]
+                obj.rotation_euler = state["rotation_euler"]
+                obj.rotation_quaternion = state["rotation_quaternion"]
+                obj.scale = state["scale"]
+                obj.hide_viewport = state["hide_viewport"]
+                obj.hide_render = state["hide_render"]
+                if hasattr(obj, "hide_set"):
+                    obj.hide_set(state["hide"])
+                settings = getattr(obj, "blendengine_object", None)
+                if settings is not None and "variables" in state:
+                    for variable, (b, i, f, text) in zip(settings.variables, state["variables"]):
+                        variable.bool_value, variable.int_value, variable.float_value, variable.string_value = b, i, f, text
+                    if "health" in state and getattr(settings, "health", None) is not None:
+                        settings.health.current_health = state["health"]
+            except (ReferenceError, RuntimeError):
+                continue
+        if snapshot["camera"] and snapshot["camera"] in self.scene.objects:
+            self.scene.camera = self.scene.objects[snapshot["camera"]]
+        view = snapshot.get("view")
+        if view is not None:
+            try:
+                space, perspective, location, rotation, distance = view
+                r3d = space.region_3d
+                r3d.view_perspective = perspective
+                r3d.view_location = location
+                r3d.view_rotation = rotation
+                r3d.view_distance = distance
+            except Exception:
+                pass
+        self._snapshot = None
+
     def start(self):
+        self._snapshot = self._capture_snapshot()
         project = self.scene.blendengine_project
         project.test_running = True
         project.test_status = "Running"
@@ -279,6 +365,11 @@ class GameSession:
         project.test_running = False
         project.test_status = status
         self._set_first_person_player_visibility(True)
+        self.input_state.clear()
+        try:
+            self._restore_snapshot()
+        except Exception as ex:  # never leave the editor half-restored because of one object
+            print("[BlendEngine] Restore after Test Run failed: %s" % ex)
         _remove_hud_handler()
         self.log("Test Run %s." % status.lower())
         self.flush_log()
@@ -335,6 +426,8 @@ class GameSession:
     def handle_event(self, event):
         if event.type not in GAME_INPUT_EVENTS:
             return False
+        if event.value == "PRESS" and getattr(event, "is_repeat", False):
+            return True
         if event.value == "PRESS":
             self.input_state.add(event.type)
             if event.type in {"F", "LEFTMOUSE"}:
